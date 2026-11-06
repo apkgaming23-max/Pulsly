@@ -80,6 +80,18 @@ jobs:
       - name: Sync Capacitor Android
         run: bunx cap sync android
 
+        - name: Set Android minimum SDK to 26
+        shell: bash
+        run: |
+          echo "Setting Pulsly minSdkVersion to 26"
+
+          if [ -f "android/variables.gradle" ]; then
+            sed -i 's/minSdkVersion = 23/minSdkVersion = 26/g' android/variables.gradle
+          fi
+
+          echo "Current Android SDK settings:"
+          cat android/variables.gradle
+
       - name: Show Capacitor configuration
         run: bunx cap doctor android
         continue-on-error: true
