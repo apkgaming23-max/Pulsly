@@ -138,3 +138,9 @@ export async function deleteMyImportedHealthData() {
   if (error) throw error;
   return true;
 }
+
+
+// Bakåtkompatibla exportnamn som används av nuvarande App.jsx.
+export const getPrivacySettings = getMyPrivacySettings;
+export const savePrivacySettings = saveMyPrivacySettings;
+export const deleteMyHealthData = deleteMyImportedHealthData;
