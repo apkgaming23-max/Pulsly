@@ -28,23 +28,41 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Configure Android SDK
+      - name: Configure Android SDK path
         shell: bash
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
-          yes | sdkmanager --licenses > /dev/null || true
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-          sdkmanager \
+          test -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          sdkmanager --list_installed
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          echo "Android SDK: $ANDROID_HOME"
+          ls -la "$ANDROID_HOME/platforms/android-35"
+          ls -la "$ANDROID_HOME/build-tools/35.0.0"
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build Pulsly web app
         run: bun run build
@@ -69,14 +87,16 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x android/gradlew
 
-      - name: Build debug APK
+      - name: Build Pulsly debug APK
         working-directory: android
         run: ./gradlew assembleDebug --stacktrace
 
-      - name: Verify APK
+      - name: Verify Pulsly APK
         shell: bash
         run: |
+          echo "Generated APK:"
           ls -lh android/app/build/outputs/apk/debug/
+
           test -f android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload Pulsly APK
