@@ -1,302 +1,222 @@
-import { Capacitor } from "@capacitor/core";
-import { Health } from "@capgo/capacitor-health";
 import { supabase } from "./supabase";
 
-const READ_TYPES = [
-  "steps",
-  "distance",
-  "calories",
-  "heartRate",
-  "restingHeartRate",
-  "exerciseTime",
-  "workouts",
-];
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
 
-const dayStart = (date = new Date()) => {
-  const value = new Date(date);
-  value.setHours(0, 0, 0, 0);
-  return value;
-};
+function daysAgoIso(days) {
+  return new Date(Date.now() - Math.max(0, days - 1) * 86400000)
+    .toISOString()
+    .slice(0, 10);
+}
 
-const dayEnd = (date = new Date()) => {
-  const value = new Date(date);
-  value.setHours(23, 59, 59, 999);
-  return value;
-};
-
-const numberValue = (value) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const sumSamples = (samples = []) =>
-  samples.reduce((total, sample) => total + numberValue(sample.value), 0);
-
-const latestValue = (samples = []) => {
-  if (!samples.length) return null;
-
-  const sorted = [...samples].sort(
-    (first, second) =>
-      new Date(second.startDate || second.recordedAt || 0) -
-      new Date(first.startDate || first.recordedAt || 0)
-  );
-
-  return numberValue(sorted[0]?.value) || null;
-};
-
-const safeRead = async (dataType, startDate, endDate, limit = 10000) => {
-  try {
-    const result = await Health.readSamples({
-      dataType,
-      startDate: startDate.toISOString(),
-      endDate: endDate.toISOString(),
-      limit,
-    });
-
-    return result?.samples || [];
-  } catch (error) {
-    console.warn(`Pulsly kunde inte läsa ${dataType}:`, error);
-    return [];
-  }
-};
-
-const normaliseWorkout = (workout, userId, provider) => {
-  const start = workout.startDate || workout.startTime || workout.startedAt;
-  const end = workout.endDate || workout.endTime || workout.endedAt;
-  const durationSeconds =
-    numberValue(workout.durationSeconds) ||
-    (start && end
-      ? Math.max(0, Math.round((new Date(end) - new Date(start)) / 1000))
-      : 0);
-
-  const externalId = String(
-    workout.id ||
-      workout.uuid ||
-      workout.externalId ||
-      `${provider}-${start || Date.now()}-${workout.workoutType || workout.activityType || "workout"}`
-  );
-
-  return {
-    user_id: userId,
-    provider,
-    external_id: externalId,
-    activity_type:
-      workout.workoutType ||
-      workout.activityType ||
-      workout.type ||
-      "Träningspass",
-    started_at: start || new Date().toISOString(),
-    ended_at: end || null,
-    duration_seconds: durationSeconds,
-    distance_meters: numberValue(
-      workout.distanceMeters ?? workout.distance ?? workout.totalDistance
-    ),
-    steps: Math.round(numberValue(workout.steps)),
-    active_calories: numberValue(
-      workout.activeCalories ?? workout.calories ?? workout.energyBurned
-    ),
-    average_heart_rate:
-      Math.round(
-        numberValue(workout.averageHeartRate ?? workout.avgHeartRate)
-      ) || null,
-    max_heart_rate:
-      Math.round(numberValue(workout.maxHeartRate)) || null,
-    average_speed_kmh:
-      numberValue(workout.averageSpeedKmh ?? workout.averageSpeed) || null,
-    average_pace_seconds_per_km:
-      Math.round(numberValue(workout.averagePaceSecondsPerKm)) || null,
-    elevation_gain_meters:
-      numberValue(workout.elevationGainMeters ?? workout.elevationGain) || null,
-    has_route: Boolean(
-      workout.hasRoute || workout.route?.length || workout.routePoints?.length
-    ),
-  };
-};
-
-const providerForPlatform = () =>
-  Capacitor.getPlatform() === "ios" ? "apple_health" : "health_connect";
-
-export const isNativeHealthAvailable = async () => {
-  if (!Capacitor.isNativePlatform()) {
-    return {
-      available: false,
-      reason: "Pulsly körs i webbläsaren. Hälsodata kräver mobilappen.",
-    };
-  }
-
-  try {
-    return await Health.isAvailable();
-  } catch (error) {
-    return {
-      available: false,
-      reason: error?.message || "Hälsotjänsten kunde inte kontrolleras.",
-    };
-  }
-};
-
-export const requestHealthAccess = async () => {
-  const availability = await isNativeHealthAvailable();
-
-  if (!availability.available) {
-    throw new Error(
-      availability.reason || "HealthKit eller Health Connect är inte tillgängligt."
-    );
-  }
-
-  return Health.requestAuthorization({
-    read: READ_TYPES,
-    write: [],
-  });
-};
-
-export const openNativeHealthSettings = async () => {
-  if (Capacitor.getPlatform() === "android") {
-    await Health.openHealthConnectSettings();
-  }
-};
-
-export const syncNativeHealth = async ({ days = 7 } = {}) => {
-  if (!Capacitor.isNativePlatform()) {
-    throw new Error(
-      "Automatisk Health-synk fungerar endast i Pulslys iPhone- eller Android-app."
-    );
-  }
-
+async function getCurrentUser() {
   const {
     data: { user },
-    error: userError,
+    error,
   } = await supabase.auth.getUser();
 
-  if (userError || !user) {
-    throw new Error("Du måste vara inloggad för att synka hälsodata.");
-  }
+  if (error) throw error;
+  if (!user) throw new Error("Du måste vara inloggad i Pulsly.");
 
-  const availability = await isNativeHealthAvailable();
-  if (!availability.available) {
-    throw new Error(
-      availability.reason || "HealthKit eller Health Connect är inte tillgängligt."
-    );
-  }
+  return user;
+}
 
-  await requestHealthAccess();
+export async function getHealthOverview({ historyDays = 30 } = {}) {
+  const user = await getCurrentUser();
+  const today = todayIso();
+  const fromDate = daysAgoIso(historyDays);
 
-  const provider = providerForPlatform();
-  const now = new Date();
-  const firstDay = dayStart(new Date(now.getTime() - (days - 1) * 86400000));
+  const [
+    todayResult,
+    historyResult,
+    metricsResult,
+    providerResult,
+    passiveResult,
+    workoutResult,
+    vo2Result,
+    syncResult,
+  ] = await Promise.all([
+    supabase
+      .from("my_health_dashboard")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("health_date", today)
+      .maybeSingle(),
 
-  const dailyRows = [];
+    supabase
+      .from("my_health_dashboard")
+      .select("*")
+      .eq("user_id", user.id)
+      .gte("health_date", fromDate)
+      .order("health_date", { ascending: true }),
 
-  for (let dayOffset = 0; dayOffset < days; dayOffset += 1) {
-    const target = new Date(firstDay.getTime() + dayOffset * 86400000);
-    const start = dayStart(target);
-    const end = dayEnd(target) > now ? now : dayEnd(target);
+    supabase
+      .from("my_latest_health_metrics")
+      .select("*")
+      .eq("user_id", user.id)
+      .maybeSingle(),
 
-    const [steps, distance, calories, exerciseTime, restingHeartRate] =
-      await Promise.all([
-        safeRead("steps", start, end),
-        safeRead("distance", start, end),
-        safeRead("calories", start, end),
-        safeRead("exerciseTime", start, end),
-        safeRead("restingHeartRate", start, end, 1000),
-      ]);
+    supabase
+      .from("my_health_provider_status")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("last_sync_at", { ascending: false }),
 
-    dailyRows.push({
-      user_id: user.id,
-      health_date: start.toISOString().slice(0, 10),
-      steps: Math.round(sumSamples(steps)),
-      active_minutes: Math.round(sumSamples(exerciseTime)),
-      distance_meters: Math.round(sumSamples(distance)),
-      active_calories: Number(sumSamples(calories).toFixed(2)),
-      resting_heart_rate: latestValue(restingHeartRate),
-      source: provider,
-      synced_at: new Date().toISOString(),
-    });
-  }
+    supabase
+      .from("passive_activity_points")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("activity_date", today)
+      .maybeSingle(),
 
-  const { error: dailyError } = await supabase
-    .from("health_daily_summary")
-    .upsert(dailyRows, {
-      onConflict: "user_id,health_date,source",
-    });
+    supabase
+      .from("my_unique_imported_workouts")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("started_at", { ascending: false })
+      .limit(30),
 
-  if (dailyError) throw dailyError;
+    supabase
+      .from("vo2max_samples")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("recorded_at", { ascending: false })
+      .limit(30),
 
-  const workoutResult = await Health.queryWorkouts({
-    startDate: firstDay.toISOString(),
-    endDate: now.toISOString(),
-    limit: 500,
-  });
+    supabase
+      .from("health_sync_log")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("started_at", { ascending: false })
+      .limit(20),
+  ]);
 
-  const normalisedWorkouts = (workoutResult?.workouts || []).map((workout) =>
-    normaliseWorkout(workout, user.id, provider)
+  const allResults = [
+    todayResult,
+    historyResult,
+    metricsResult,
+    providerResult,
+    passiveResult,
+    workoutResult,
+    vo2Result,
+    syncResult,
+  ];
+
+  const failure = allResults.find((result) => result.error);
+  if (failure?.error) throw failure.error;
+
+  return {
+    today: todayResult.data || null,
+    history: historyResult.data || [],
+    latestMetrics: metricsResult.data || null,
+    providers: providerResult.data || [],
+    passivePoints: passiveResult.data || null,
+    workouts: workoutResult.data || [],
+    vo2History: vo2Result.data || [],
+    syncHistory: syncResult.data || [],
+  };
+}
+
+export async function getWorkoutDetails(workoutId) {
+  const user = await getCurrentUser();
+
+  const [workoutResult, heartResult, routeResult] = await Promise.all([
+    supabase
+      .from("my_unique_imported_workouts")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("id", workoutId)
+      .maybeSingle(),
+
+    supabase
+      .from("heart_rate_samples")
+      .select("id,bpm,recorded_at,source,provider")
+      .eq("user_id", user.id)
+      .eq("workout_id", workoutId)
+      .order("recorded_at", { ascending: true }),
+
+    supabase
+      .from("imported_workout_routes")
+      .select(
+        "id,route_order,latitude,longitude,altitude_meters,accuracy_meters,recorded_at"
+      )
+      .eq("user_id", user.id)
+      .eq("workout_id", workoutId)
+      .order("route_order", { ascending: true }),
+  ]);
+
+  if (workoutResult.error) throw workoutResult.error;
+  if (heartResult.error) throw heartResult.error;
+  if (routeResult.error) throw routeResult.error;
+
+  const heart = heartResult.data || [];
+  const bpmValues = heart
+    .map((sample) => Number(sample.bpm))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  const calculatedAverageHeartRate = bpmValues.length
+    ? Math.round(
+        bpmValues.reduce((sum, value) => sum + value, 0) / bpmValues.length
+      )
+    : null;
+
+  const calculatedMaxHeartRate = bpmValues.length
+    ? Math.max(...bpmValues)
+    : null;
+
+  return {
+    workout: workoutResult.data || null,
+    heartRateSamples: heart,
+    route: routeResult.data || [],
+    calculatedAverageHeartRate,
+    calculatedMaxHeartRate,
+  };
+}
+
+export async function recalculatePassivePoints(date = todayIso()) {
+  const user = await getCurrentUser();
+
+  const { error: duplicateError } = await supabase.rpc(
+    "find_my_health_workout_duplicates"
   );
+  if (duplicateError) throw duplicateError;
 
-  if (normalisedWorkouts.length) {
-    const { error: workoutError } = await supabase
-      .from("imported_workouts")
-      .upsert(normalisedWorkouts, {
-        onConflict: "user_id,provider,external_id",
-      });
-
-    if (workoutError) throw workoutError;
-  }
-
-  const heartSamples = await safeRead("heartRate", firstDay, now, 50000);
-  const heartRows = heartSamples
-    .map((sample) => ({
-      user_id: user.id,
-      workout_id: null,
-      bpm: Math.round(numberValue(sample.value)),
-      recorded_at:
-        sample.startDate || sample.recordedAt || new Date().toISOString(),
-      source: provider,
-    }))
-    .filter((row) => row.bpm > 0 && row.bpm < 300);
-
-  if (heartRows.length) {
-    const chunkSize = 1000;
-    for (let index = 0; index < heartRows.length; index += chunkSize) {
-      const { error: heartError } = await supabase
-        .from("heart_rate_samples")
-        .insert(heartRows.slice(index, index + chunkSize));
-
-      if (heartError) throw heartError;
-    }
-  }
-
-  const today = dayStart(now).toISOString().slice(0, 10);
-  const { data: passivePoints, error: passiveError } = await supabase.rpc(
+  const { data, error } = await supabase.rpc(
     "calculate_passive_activity_points",
     {
       p_user_id: user.id,
-      p_date: today,
+      p_date: date,
     }
   );
 
-  if (passiveError) throw passiveError;
+  if (error) throw error;
+  return Number(data || 0);
+}
 
-  const { error: providerError } = await supabase
-    .from("health_providers")
-    .upsert(
-      {
-        user_id: user.id,
-        provider,
-        enabled: true,
-        last_sync_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: "user_id,provider",
-      }
-    );
+export async function getProviderStatus() {
+  const user = await getCurrentUser();
 
-  if (providerError) throw providerError;
+  const { data, error } = await supabase
+    .from("my_health_provider_status")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("last_sync_at", { ascending: false });
 
-  return {
-    provider,
-    syncedDays: dailyRows.length,
-    importedWorkouts: normalisedWorkouts.length,
-    importedHeartSamples: heartRows.length,
-    passivePoints: numberValue(passivePoints),
-  };
-};
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getHealthSyncHistory(limit = 20) {
+  const user = await getCurrentUser();
+
+  const { data, error } = await supabase
+    .from("health_sync_log")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("started_at", { ascending: false })
+    .limit(Math.max(1, Math.min(100, Number(limit) || 20)));
+
+  if (error) throw error;
+  return data || [];
+}
