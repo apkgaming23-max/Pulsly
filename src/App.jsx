@@ -98,28 +98,27 @@ function Metric({ icon: Icon, label, value }) {
 }
 
 function formatDuration(totalSeconds) {
-  const safeSeconds = Math.max(0, Math.round(totalSeconds || 0));
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor((safeSeconds % 3600) / 60);
-  const seconds = safeSeconds % 60;
+  const value = Math.max(0, Math.round(Number(totalSeconds) || 0));
 
-  return [
-    String(hours).padStart(2, "0"),
-    String(minutes).padStart(2, "0"),
-    String(seconds).padStart(2, "0"),
-  ].join(":");
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const seconds = value % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+    2,
+    "0"
+  )}:${String(seconds).padStart(2, "0")}`;
 }
 
-function formatPace(secondsPerKilometer) {
-  if (
-    !Number.isFinite(secondsPerKilometer) ||
-    secondsPerKilometer <= 0
-  ) {
+function formatPace(secondsPerKm) {
+  const value = Number(secondsPerKm);
+
+  if (!Number.isFinite(value) || value <= 0) {
     return "--:--";
   }
 
-  const minutes = Math.floor(secondsPerKilometer / 60);
-  const seconds = Math.round(secondsPerKilometer % 60);
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
 
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
@@ -148,20 +147,20 @@ function initials(value) {
 function haversine(first, second) {
   const radius = 6371;
 
-  const latitudeDifference =
+  const dLat =
     ((second.latitude - first.latitude) * Math.PI) / 180;
 
-  const longitudeDifference =
+  const dLon =
     ((second.longitude - first.longitude) * Math.PI) / 180;
 
-  const firstLatitude = (first.latitude * Math.PI) / 180;
-  const secondLatitude = (second.latitude * Math.PI) / 180;
+  const lat1 = (first.latitude * Math.PI) / 180;
+  const lat2 = (second.latitude * Math.PI) / 180;
 
   const value =
-    Math.sin(latitudeDifference / 2) ** 2 +
-    Math.cos(firstLatitude) *
-      Math.cos(secondLatitude) *
-      Math.sin(longitudeDifference / 2) ** 2;
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(dLon / 2) ** 2;
 
   return (
     radius *
@@ -174,6 +173,7 @@ function ActivityMap({ positions = [], active = false }) {
   return (
     <div className="map">
       <div className="map-grid" />
+
       <div className="road road-one" />
       <div className="road road-two" />
       <div className="road road-three" />
@@ -222,42 +222,220 @@ function ActivityMap({ positions = [], active = false }) {
   );
 }
 
+function VerificationPanel({
+  summary,
+  personalStatus,
+  loading,
+  onRecheck,
+}) {
+  if (!summary) {
+    return (
+      <div className="verification-panel">
+        <span>Ingen verifieringsdata ännu.</span>
+      </div>
+    );
+  }
+
+  const completed =
+    summary.status === "completed" ||
+    Number(summary.verified_participants || 0) >=
+      Number(summary.minimum_participants || 2);
+
+  return (
+    <div
+      className={`verification-panel ${
+        completed ? "verified-panel" : ""
+      }`}
+    >
+      <div className="verification-title">
+        {completed ? (
+          <>
+            <CheckCircle2 size={20} />
+            <strong>Gemensam aktivitet verifierad</strong>
+          </>
+        ) : (
+          <>
+            <RefreshCw size={20} />
+            <strong>Verifiering pågår</strong>
+          </>
+        )}
+      </div>
+
+      <div className="verification-grid">
+        <div>
+          <strong>
+            {Number(summary.accepted_participants || 0)}
+          </strong>
+          <span>Anmälda</span>
+        </div>
+
+        <div>
+          <strong>
+            {Number(summary.submitted_activities || 0)}
+          </strong>
+          <span>Aktiviteter</span>
+        </div>
+
+        <div>
+          <strong>
+            {Number(summary.verified_participants || 0)}
+          </strong>
+          <span>Verifierade</span>
+        </div>
+
+        <div>
+          <strong>
+            {Number(summary.pending_verification || 0)}
+          </strong>
+          <span>Väntar</span>
+        </div>
+      </div>
+
+      {personalStatus && (
+        <div className="my-verification">
+          <strong>Din aktivitet</strong>
+
+          {personalStatus.verification_status === "verified" ? (
+            <>
+              <span className="bonus-success">
+                <CheckCircle2 size={16} />
+                Gruppbonus 1,5×
+              </span>
+
+              <div className="points-breakdown">
+                <span>
+                  Grundpoäng:{" "}
+                  <b>
+                    {Number(
+                      personalStatus.base_points || 0
+                    ).toLocaleString("sv-SE")}
+                  </b>
+                </span>
+
+                <span>
+                  Multiplikator:{" "}
+                  <b>{personalStatus.multiplier || 1}×</b>
+                </span>
+
+                <span>
+                  Totalt:{" "}
+                  <b>
+                    {Number(
+                      personalStatus.final_points || 0
+                    ).toLocaleString("sv-SE")}{" "}
+                    p
+                  </b>
+                </span>
+              </div>
+            </>
+          ) : personalStatus.verification_status ===
+            "not_verified" ? (
+            <span className="not-verified">
+              Aktiviteten kunde inte verifieras som gemensam.
+            </span>
+          ) : personalStatus.verification_status ===
+            "waiting_for_activity" ? (
+            <span className="waiting">
+              Väntar på din aktivitet.
+            </span>
+          ) : (
+            <span className="waiting">
+              Väntar på övriga deltagares aktiviteter.
+            </span>
+          )}
+        </div>
+      )}
+
+      {!completed && (
+        <button
+          className="recheck-button"
+          disabled={loading}
+          onClick={onRecheck}
+        >
+          <RefreshCw
+            size={17}
+            className={loading ? "spin" : ""}
+          />
+
+          {loading
+            ? "Kontrollerar..."
+            : "Kontrollera igen"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   const [page, setPage] = useState("home");
+
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
   const [activities, setActivities] = useState([]);
   const [posts, setPosts] = useState([]);
+
   const [events, setEvents] = useState([]);
   const [invites, setInvites] = useState([]);
+
+  const [eventSummaries, setEventSummaries] = useState({});
+  const [personalEventStatuses, setPersonalEventStatuses] =
+    useState({});
+
+  const [checkingEventId, setCheckingEventId] =
+    useState(null);
+
   const [settings, setSettings] = useState(null);
 
   const [tracking, setTracking] = useState(false);
   const [paused, setPaused] = useState(false);
-  const [activityType, setActivityType] = useState(activityTypes[0]);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [distanceKilometers, setDistanceKilometers] = useState(0);
+
+  const [activityType, setActivityType] =
+    useState(activityTypes[0]);
+
+  const [elapsedSeconds, setElapsedSeconds] =
+    useState(0);
+
+  const [distanceKilometers, setDistanceKilometers] =
+    useState(0);
+
   const [positions, setPositions] = useState([]);
   const [splits, setSplits] = useState([]);
-  const [selectedEventId, setSelectedEventId] = useState("");
 
-  const [eventDialog, setEventDialog] = useState(false);
-  const [eventForm, setEventForm] = useState(initialEventForm);
+  const [selectedEventId, setSelectedEventId] =
+    useState("");
 
-  const [shareDialog, setShareDialog] = useState(false);
-  const [completedActivity, setCompletedActivity] = useState(null);
-  const [shareMessage, setShareMessage] = useState("");
-  const [shareVisibility, setShareVisibility] = useState("members");
-  const [shareRoute, setShareRoute] = useState(false);
-  const [shareSplits, setShareSplits] = useState(true);
+  const [eventDialog, setEventDialog] =
+    useState(false);
+
+  const [eventForm, setEventForm] =
+    useState(initialEventForm);
+
+  const [shareDialog, setShareDialog] =
+    useState(false);
+
+  const [completedActivity, setCompletedActivity] =
+    useState(null);
+
+  const [shareMessage, setShareMessage] =
+    useState("");
+
+  const [shareVisibility, setShareVisibility] =
+    useState("members");
+
+  const [shareRoute, setShareRoute] =
+    useState(false);
+
+  const [shareSplits, setShareSplits] =
+    useState(true);
 
   const watchId = useRef(null);
   const lastPosition = useRef(null);
+
   const lastAnnouncedDistance = useRef(0);
   const lastSplitElapsed = useRef(0);
 
@@ -278,23 +456,36 @@ export default function App() {
 
   const currentSpeed =
     elapsedSeconds > 0
-      ? distanceKilometers / (elapsedSeconds / 3600)
+      ? distanceKilometers /
+        (elapsedSeconds / 3600)
       : 0;
 
   const currentPoints = Math.floor(
-    (elapsedSeconds / 60) * activityType.pointsPerMinute
+    (elapsedSeconds / 60) *
+      activityType.pointsPerMinute
   );
 
   const totals = useMemo(() => {
     return activities.reduce(
       (result, activity) => {
-        result.points += Number(activity.points || 0);
-        result.steps += Number(activity.steps || 0);
-        result.minutes += Math.round(
-          Number(activity.duration_seconds || 0) / 60
+        result.points += Number(
+          activity.points || 0
         );
+
+        result.steps += Number(
+          activity.steps || 0
+        );
+
+        result.minutes += Math.round(
+          Number(
+            activity.duration_seconds || 0
+          ) / 60
+        );
+
         result.distance +=
-          Number(activity.distance_meters || 0) / 1000;
+          Number(
+            activity.distance_meters || 0
+          ) / 1000;
 
         return result;
       },
@@ -314,14 +505,17 @@ export default function App() {
       try {
         const {
           data: { session: currentSession },
-        } = await supabase.auth.getSession();
+        } =
+          await supabase.auth.getSession();
 
         if (!mounted) return;
 
         setSession(currentSession);
 
         if (currentSession?.user) {
-          await loadAll(currentSession.user.id);
+          await loadAll(
+            currentSession.user.id
+          );
         }
       } catch (error) {
         console.error(error);
@@ -336,25 +530,36 @@ export default function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      async (event, nextSession) => {
-        if (event === "PASSWORD_RECOVERY") return;
+    } =
+      supabase.auth.onAuthStateChange(
+        async (
+          event,
+          nextSession
+        ) => {
+          if (
+            event ===
+            "PASSWORD_RECOVERY"
+          ) {
+            return;
+          }
 
-        setSession(nextSession);
+          setSession(nextSession);
 
-        if (nextSession?.user) {
-          await loadAll(nextSession.user.id);
-        } else {
-          setProfile(null);
-          setActivities([]);
-          setPosts([]);
-          setEvents([]);
-          setInvites([]);
+          if (nextSession?.user) {
+            await loadAll(
+              nextSession.user.id
+            );
+          } else {
+            setProfile(null);
+            setActivities([]);
+            setPosts([]);
+            setEvents([]);
+            setInvites([]);
+          }
+
+          setAuthLoading(false);
         }
-
-        setAuthLoading(false);
-      }
-    );
+      );
 
     return () => {
       mounted = false;
@@ -363,69 +568,118 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (
+      page === "events" &&
+      session?.user
+    ) {
+      refreshEventPage();
+    }
+  }, [page]);
+
+  useEffect(() => {
     if (!tracking || paused) return;
 
-    const timer = window.setInterval(() => {
-      setElapsedSeconds((value) => value + 1);
-    }, 1000);
+    const timer =
+      window.setInterval(() => {
+        setElapsedSeconds(
+          (value) => value + 1
+        );
+      }, 1000);
 
-    return () => window.clearInterval(timer);
+    return () =>
+      window.clearInterval(timer);
   }, [tracking, paused]);
 
   useEffect(() => {
     if (!tracking || paused) return;
 
     const intervalMeters =
-      Number(settings?.voice_interval_meters) || 1000;
+      Number(
+        settings?.voice_interval_meters
+      ) || 1000;
 
-    const currentMeters = distanceKilometers * 1000;
-    const currentInterval = Math.floor(
-      currentMeters / intervalMeters
-    );
+    const currentMeters =
+      distanceKilometers * 1000;
 
-    const previousInterval = Math.floor(
-      lastAnnouncedDistance.current / intervalMeters
-    );
+    const currentInterval =
+      Math.floor(
+        currentMeters /
+          intervalMeters
+      );
 
-    if (currentInterval <= previousInterval) return;
+    const previousInterval =
+      Math.floor(
+        lastAnnouncedDistance.current /
+          intervalMeters
+      );
+
+    if (
+      currentInterval <=
+      previousInterval
+    ) {
+      return;
+    }
 
     const splitSeconds =
-      elapsedSeconds - lastSplitElapsed.current;
+      elapsedSeconds -
+      lastSplitElapsed.current;
 
     const split = {
-      split_number: currentInterval,
-      distance_meters: intervalMeters,
-      elapsed_seconds: elapsedSeconds,
-      split_seconds: splitSeconds,
+      split_number:
+        currentInterval,
+
+      distance_meters:
+        intervalMeters,
+
+      elapsed_seconds:
+        elapsedSeconds,
+
+      split_seconds:
+        splitSeconds,
+
       pace_seconds_per_km:
         intervalMeters > 0
-          ? splitSeconds / (intervalMeters / 1000)
+          ? splitSeconds /
+            (intervalMeters / 1000)
           : null,
+
       average_speed_kmh:
         elapsedSeconds > 0
-          ? distanceKilometers / (elapsedSeconds / 3600)
+          ? distanceKilometers /
+            (elapsedSeconds / 3600)
           : null,
     };
 
-    setSplits((current) => [...current, split]);
+    setSplits((current) => [
+      ...current,
+      split,
+    ]);
 
-    lastSplitElapsed.current = elapsedSeconds;
-    lastAnnouncedDistance.current = currentMeters;
+    lastSplitElapsed.current =
+      elapsedSeconds;
 
-    speakSplit(currentInterval, splitSeconds);
+    lastAnnouncedDistance.current =
+      currentMeters;
+
+    speakSplit(
+      currentInterval,
+      splitSeconds
+    );
   }, [
     distanceKilometers,
     elapsedSeconds,
     paused,
-    settings,
     tracking,
+    settings,
   ]);
 
   useEffect(() => {
     return () => {
       stopGpsWatcher();
 
-      if ("speechSynthesis" in window) {
+      if (
+        "speechSynthesis" in window
+      ) {
         window.speechSynthesis.cancel();
       }
     };
@@ -442,11 +696,12 @@ export default function App() {
   }
 
   async function loadProfile(userId) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", userId)
-      .maybeSingle();
+    const { data, error } =
+      await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", userId)
+        .maybeSingle();
 
     if (error) {
       console.error(error);
@@ -459,14 +714,15 @@ export default function App() {
   }
 
   async function loadActivities(userId) {
-    const { data, error } = await supabase
-      .from("activities")
-      .select("*")
-      .eq("user_id", userId)
-      .order("started_at", {
-        ascending: false,
-      })
-      .limit(100);
+    const { data, error } =
+      await supabase
+        .from("activities")
+        .select("*")
+        .eq("user_id", userId)
+        .order("started_at", {
+          ascending: false,
+        })
+        .limit(100);
 
     if (error) {
       console.error(error);
@@ -477,11 +733,12 @@ export default function App() {
   }
 
   async function loadSettings(userId) {
-    const { data, error } = await supabase
-      .from("user_settings")
-      .select("*")
-      .eq("user_id", userId)
-      .maybeSingle();
+    const { data, error } =
+      await supabase
+        .from("user_settings")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle();
 
     if (error) {
       console.error(error);
@@ -492,7 +749,6 @@ export default function App() {
         user_id: userId,
         voice_coach_enabled: true,
         voice_interval_meters: 1000,
-        voice_distance: true,
         voice_total_time: true,
         voice_split_time: true,
         voice_average_pace: true,
@@ -504,8 +760,8 @@ export default function App() {
 
   async function loadEvents(userId) {
     const [
-      { data: eventData, error: eventError },
-      { data: inviteData, error: inviteError },
+      eventResult,
+      inviteResult,
     ] = await Promise.all([
       supabase
         .from("group_events")
@@ -515,66 +771,182 @@ export default function App() {
         }),
 
       supabase
-        .from("group_event_invites")
+        .from(
+          "group_event_invites"
+        )
         .select(`
           *,
           group_events (*)
         `)
-        .eq("invited_user_id", userId)
+        .eq(
+          "invited_user_id",
+          userId
+        )
         .order("invited_at", {
           ascending: false,
         }),
     ]);
 
-    if (eventError) {
-      console.error(eventError);
-      notifyError(eventError.message);
+    if (eventResult.error) {
+      console.error(
+        eventResult.error
+      );
+
+      notifyError(
+        eventResult.error.message
+      );
     }
 
-    if (inviteError) {
-      console.error(inviteError);
+    if (inviteResult.error) {
+      console.error(
+        inviteResult.error
+      );
     }
 
-    setEvents(eventData || []);
-    setInvites(inviteData || []);
+    const nextEvents =
+      eventResult.data || [];
+
+    setEvents(nextEvents);
+    setInvites(
+      inviteResult.data || []
+    );
+
+    await loadEventSummaries(
+      nextEvents
+    );
+  }
+
+  async function loadEventSummaries(
+    eventList
+  ) {
+    if (!eventList?.length) {
+      setEventSummaries({});
+      return;
+    }
+
+    const eventIds =
+      eventList.map(
+        (event) => event.id
+      );
+
+    const { data, error } =
+      await supabase
+        .from(
+          "group_event_live_summary"
+        )
+        .select("*")
+        .in(
+          "event_id",
+          eventIds
+        );
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    const nextSummaries = {};
+
+    (data || []).forEach(
+      (summary) => {
+        nextSummaries[
+          summary.event_id
+        ] = summary;
+      }
+    );
+
+    setEventSummaries(
+      nextSummaries
+    );
+
+    await loadPersonalEventStatuses(
+      eventList
+    );
+  }
+
+  async function loadPersonalEventStatuses(
+    eventList
+  ) {
+    const nextStatuses = {};
+
+    for (const event of eventList) {
+      try {
+        const { data, error } =
+          await supabase.rpc(
+            "get_my_group_event_status",
+            {
+              p_event_id:
+                event.id,
+            }
+          );
+
+        if (!error && data) {
+          nextStatuses[
+            event.id
+          ] = data;
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    setPersonalEventStatuses(
+      nextStatuses
+    );
+  }
+
+  async function refreshEventPage() {
+    if (!session?.user) return;
+
+    await loadEvents(
+      session.user.id
+    );
+
+    await loadActivities(
+      session.user.id
+    );
   }
 
   async function loadPosts() {
-    const { data, error } = await supabase
-      .from("activity_posts")
-      .select(`
-        *,
-        profiles (
-          full_name,
-          avatar_url
-        ),
-        activities (
-          activity_type,
-          duration_seconds,
-          distance_meters,
-          steps,
-          points,
-          verified,
-          average_pace_seconds_per_km,
-          average_speed_kmh,
-          started_at,
-          event_id
-        ),
-        activity_post_likes (
-          user_id
-        ),
-        activity_post_comments (
-          id,
-          comment,
-          created_at,
-          user_id
+    const { data, error } =
+      await supabase
+        .from("activity_posts")
+        .select(`
+          *,
+          profiles (
+            full_name,
+            avatar_url
+          ),
+          activities (
+            activity_type,
+            duration_seconds,
+            distance_meters,
+            steps,
+            points,
+            verified,
+            average_pace_seconds_per_km,
+            average_speed_kmh,
+            started_at,
+            event_id
+          ),
+          activity_post_likes (
+            user_id
+          ),
+          activity_post_comments (
+            id,
+            comment,
+            created_at,
+            user_id
+          )
+        `)
+        .in(
+          "visibility",
+          ["members", "public"]
         )
-      `)
-      .in("visibility", ["members", "public"])
-      .order("created_at", {
-        ascending: false,
-      })
-      .limit(50);
+        .order("created_at", {
+          ascending: false,
+        })
+        .limit(50);
 
     if (error) {
       console.error(error);
@@ -605,75 +977,128 @@ export default function App() {
       watchId.current !== null &&
       navigator.geolocation
     ) {
-      navigator.geolocation.clearWatch(watchId.current);
+      navigator.geolocation.clearWatch(
+        watchId.current
+      );
+
       watchId.current = null;
     }
   }
 
   function speak(text) {
-    if (!settings?.voice_coach_enabled) return;
-    if (!("speechSynthesis" in window)) return;
+    if (
+      !settings?.voice_coach_enabled
+    ) {
+      return;
+    }
+
+    if (
+      !(
+        "speechSynthesis" in window
+      )
+    ) {
+      return;
+    }
 
     window.speechSynthesis.cancel();
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utterance =
+      new SpeechSynthesisUtterance(
+        text
+      );
 
-    utterance.lang = settings?.voice_language || "sv-SE";
+    utterance.lang =
+      settings?.voice_language ||
+      "sv-SE";
+
     utterance.rate = 0.95;
     utterance.pitch = 1;
 
-    window.speechSynthesis.speak(utterance);
+    window.speechSynthesis.speak(
+      utterance
+    );
   }
 
-  function speakSplit(splitNumber, splitSeconds) {
-    if (!settings?.voice_coach_enabled) return;
+  function speakSplit(
+    splitNumber,
+    splitSeconds
+  ) {
+    const totalMinutes =
+      Math.floor(
+        elapsedSeconds / 60
+      );
 
-    const totalMinutes = Math.floor(elapsedSeconds / 60);
-    const totalSeconds = elapsedSeconds % 60;
+    const totalSeconds =
+      elapsedSeconds % 60;
 
-    const splitMinutes = Math.floor(splitSeconds / 60);
-    const splitRemainingSeconds = Math.round(splitSeconds % 60);
+    const splitMinutes =
+      Math.floor(
+        splitSeconds / 60
+      );
 
-    const pace = formatPace(averagePace);
-    const [paceMinutes, paceSeconds] = pace.split(":");
+    const splitRemainder =
+      Math.round(
+        splitSeconds % 60
+      );
 
-    let text = `${splitNumber} kilometer.`;
+    const pace =
+      formatPace(averagePace);
 
-    if (settings.voice_total_time) {
-      text += ` Total tid ${totalMinutes} minuter`;
+    let text =
+      `${splitNumber} kilometer.`;
+
+    if (
+      settings?.voice_total_time
+    ) {
+      text +=
+        ` Total tid ${totalMinutes} minuter`;
 
       if (totalSeconds > 0) {
-        text += ` och ${totalSeconds} sekunder`;
-      }
-
-      text += ".";
-    }
-
-    if (settings.voice_split_time) {
-      text += ` Senaste kilometer ${splitMinutes} minuter`;
-
-      if (splitRemainingSeconds > 0) {
-        text += ` och ${splitRemainingSeconds} sekunder`;
+        text +=
+          ` och ${totalSeconds} sekunder`;
       }
 
       text += ".";
     }
 
     if (
-      settings.voice_average_pace &&
+      settings?.voice_split_time
+    ) {
+      text +=
+        ` Senaste kilometer ${splitMinutes} minuter`;
+
+      if (
+        splitRemainder > 0
+      ) {
+        text +=
+          ` och ${splitRemainder} sekunder`;
+      }
+
+      text += ".";
+    }
+
+    if (
+      settings?.voice_average_pace &&
       activityType.paceMode &&
       pace !== "--:--"
     ) {
-      text += ` Genomsnittstempo ${paceMinutes} minuter och ${paceSeconds} sekunder per kilometer.`;
+      const [
+        paceMinutes,
+        paceSeconds,
+      ] = pace.split(":");
+
+      text +=
+        ` Genomsnittstempo ${paceMinutes} minuter och ${paceSeconds} sekunder per kilometer.`;
     }
 
     if (
-      settings.voice_speed &&
+      settings?.voice_speed &&
       !activityType.paceMode
     ) {
-      text += ` Genomsnittshastighet ${currentSpeed.toFixed(
-        1
-      )} kilometer i timmen.`;
+      text +=
+        ` Genomsnittshastighet ${currentSpeed.toFixed(
+          1
+        )} kilometer i timmen.`;
     }
 
     speak(text);
@@ -681,61 +1106,83 @@ export default function App() {
 
   function startTracking() {
     if (!navigator.geolocation) {
-      notifyError("GPS stöds inte av denna enhet.");
+      notifyError(
+        "GPS stöds inte av denna enhet."
+      );
+
       return;
     }
 
     setTracking(true);
     setPaused(false);
+
     setElapsedSeconds(0);
     setDistanceKilometers(0);
+
     setPositions([]);
     setSplits([]);
 
-    lastPosition.current = null;
-    lastAnnouncedDistance.current = 0;
-    lastSplitElapsed.current = 0;
+    lastPosition.current =
+      null;
+
+    lastAnnouncedDistance.current =
+      0;
+
+    lastSplitElapsed.current =
+      0;
 
     speak(
-      `${activityType.name} startad. Röstcoach är ${
-        settings?.voice_coach_enabled
-          ? "aktiverad"
-          : "avstängd"
-      }.`
+      `${activityType.name} startad.`
     );
 
     watchId.current =
       navigator.geolocation.watchPosition(
         ({ coords }) => {
           const point = {
-            latitude: coords.latitude,
-            longitude: coords.longitude,
-            accuracy: coords.accuracy,
-            recordedAt: new Date().toISOString(),
+            latitude:
+              coords.latitude,
+
+            longitude:
+              coords.longitude,
+
+            accuracy:
+              coords.accuracy,
+
+            recordedAt:
+              new Date().toISOString(),
           };
 
           if (
             lastPosition.current &&
             coords.accuracy <= 80
           ) {
-            const segment = haversine(
-              lastPosition.current,
-              point
-            );
+            const segment =
+              haversine(
+                lastPosition.current,
+                point
+              );
 
-            if (segment > 0 && segment < 0.5) {
+            if (
+              segment > 0 &&
+              segment < 0.5
+            ) {
               setDistanceKilometers(
-                (current) => current + segment
+                (current) =>
+                  current +
+                  segment
               );
             }
           }
 
-          lastPosition.current = point;
+          lastPosition.current =
+            point;
 
-          setPositions((current) => [
-            ...current,
-            point,
-          ]);
+          setPositions(
+            (current) => [
+              ...current,
+              point,
+            ]
+          );
         },
         () => {
           notifyError(
@@ -753,330 +1200,596 @@ export default function App() {
   async function finishActivity() {
     stopGpsWatcher();
 
-    const endedAt = new Date();
+    const endedAt =
+      new Date();
 
-    const startedAt = new Date(
-      endedAt.getTime() - elapsedSeconds * 1000
-    );
+    const startedAt =
+      new Date(
+        endedAt.getTime() -
+          elapsedSeconds * 1000
+      );
 
-    const durationSeconds = Math.max(elapsedSeconds, 60);
-    const minutes = Math.max(
-      1,
-      Math.round(durationSeconds / 60)
-    );
+    const durationSeconds =
+      Math.max(
+        elapsedSeconds,
+        60
+      );
+
+    const minutes =
+      Math.max(
+        1,
+        Math.round(
+          durationSeconds / 60
+        )
+      );
 
     const basePoints =
-      minutes * activityType.pointsPerMinute;
+      minutes *
+      activityType.pointsPerMinute;
 
     try {
-      const { data: activity, error } = await supabase
-        .from("activities")
-        .insert({
-          user_id: session.user.id,
-          activity_type: activityType.name,
-          source: "gps",
-          started_at: startedAt.toISOString(),
-          ended_at: endedAt.toISOString(),
-          duration_seconds: durationSeconds,
-          distance_meters: Math.round(
-            distanceKilometers * 1000
-          ),
-          steps: 0,
-          base_points: basePoints,
-          multiplier: 1,
-          is_group_activity: false,
-          verified: positions.length >= 2,
-          verification_source: "GPS",
-          event_id: selectedEventId || null,
+      const {
+        data: activity,
+        error,
+      } =
+        await supabase
+          .from("activities")
+          .insert({
+            user_id:
+              session.user.id,
 
-          average_pace_seconds_per_km:
-            activityType.paceMode &&
-            distanceKilometers > 0
-              ? Math.round(averagePace)
-              : null,
+            activity_type:
+              activityType.name,
 
-          average_speed_kmh:
-            elapsedSeconds > 0
-              ? Number(currentSpeed.toFixed(2))
-              : null,
-        })
-        .select()
-        .single();
+            source: "gps",
+
+            started_at:
+              startedAt.toISOString(),
+
+            ended_at:
+              endedAt.toISOString(),
+
+            duration_seconds:
+              durationSeconds,
+
+            distance_meters:
+              Math.round(
+                distanceKilometers *
+                  1000
+              ),
+
+            steps: 0,
+
+            base_points:
+              basePoints,
+
+            multiplier: 1,
+
+            is_group_activity:
+              false,
+
+            verified:
+              positions.length >= 2,
+
+            verification_source:
+              "GPS",
+
+            event_id:
+              selectedEventId ||
+              null,
+
+            average_pace_seconds_per_km:
+              activityType.paceMode &&
+              distanceKilometers > 0
+                ? Math.round(
+                    averagePace
+                  )
+                : null,
+
+            average_speed_kmh:
+              elapsedSeconds > 0
+                ? Number(
+                    currentSpeed.toFixed(
+                      2
+                    )
+                  )
+                : null,
+          })
+          .select()
+          .single();
 
       if (error) throw error;
 
-      if (positions.length > 0) {
-        const routeRows = positions.map((point) => ({
-          activity_id: activity.id,
-          user_id: session.user.id,
-          latitude: point.latitude,
-          longitude: point.longitude,
-          accuracy_meters: point.accuracy,
-          recorded_at: point.recordedAt,
-        }));
+      if (
+        positions.length > 0
+      ) {
+        const routeRows =
+          positions.map(
+            (point) => ({
+              activity_id:
+                activity.id,
 
-        const { error: routeError } = await supabase
-          .from("activity_routes")
+              user_id:
+                session.user.id,
+
+              latitude:
+                point.latitude,
+
+              longitude:
+                point.longitude,
+
+              accuracy_meters:
+                point.accuracy,
+
+              recorded_at:
+                point.recordedAt,
+            })
+          );
+
+        await supabase
+          .from(
+            "activity_routes"
+          )
           .insert(routeRows);
-
-        if (routeError) {
-          console.error(routeError);
-        }
       }
 
       if (splits.length > 0) {
-        const splitRows = splits.map((split) => ({
-          ...split,
-          activity_id: activity.id,
-          user_id: session.user.id,
-        }));
+        const splitRows =
+          splits.map(
+            (split) => ({
+              ...split,
 
-        const { error: splitError } = await supabase
-          .from("activity_splits")
+              activity_id:
+                activity.id,
+
+              user_id:
+                session.user.id,
+            })
+          );
+
+        await supabase
+          .from(
+            "activity_splits"
+          )
           .insert(splitRows);
-
-        if (splitError) {
-          console.error(splitError);
-        }
       }
 
       if (selectedEventId) {
-        const { error: matchError } = await supabase
-          .from("event_activity_matches")
+        await supabase
+          .from(
+            "event_activity_matches"
+          )
           .upsert(
             {
-              event_id: selectedEventId,
-              user_id: session.user.id,
-              activity_id: activity.id,
-              verification_status: "pending",
-              group_bonus_awarded: false,
+              event_id:
+                selectedEventId,
+
+              user_id:
+                session.user.id,
+
+              activity_id:
+                activity.id,
+
+              verification_status:
+                "pending",
+
+              group_bonus_awarded:
+                false,
             },
             {
-              onConflict: "event_id,user_id",
+              onConflict:
+                "event_id,user_id",
             }
           );
 
-        if (matchError) {
-          console.error(matchError);
-        }
+        await supabase.rpc(
+          "recheck_my_group_event",
+          {
+            p_event_id:
+              selectedEventId,
+          }
+        );
       }
-
-      speak(
-        `Aktiviteten är avslutad. Distans ${distanceKilometers.toFixed(
-          2
-        )} kilometer. Total tid ${Math.floor(
-          durationSeconds / 60
-        )} minuter.`
-      );
 
       setCompletedActivity({
         ...activity,
-        savedPositions: [...positions],
-        savedSplits: [...splits],
+
+        savedPositions:
+          [...positions],
+
+        savedSplits:
+          [...splits],
       });
 
       setShareDialog(true);
 
-      await loadActivities(session.user.id);
+      await loadActivities(
+        session.user.id
+      );
+
+      if (selectedEventId) {
+        await loadEvents(
+          session.user.id
+        );
+      }
 
       notify(
         selectedEventId
-          ? "Aktiviteten sparades. Gruppbonusen verifieras efter eventet."
+          ? "Aktiviteten sparades. Pulsly kontrollerar nu gruppaktiviteten."
           : `Aktiviteten sparades. +${basePoints} poäng.`
       );
-    } catch (error) {
-      console.error(error);
 
-      notifyError(
-        `Aktiviteten kunde inte sparas: ${
-          error.message || "okänt fel"
-        }`
+      speak(
+        `Aktiviteten avslutad. Distans ${distanceKilometers.toFixed(
+          2
+        )} kilometer.`
       );
-    } finally {
-      setTracking(false);
-      setPaused(false);
-      setElapsedSeconds(0);
-      setDistanceKilometers(0);
-      setPositions([]);
-      setSplits([]);
-      setSelectedEventId("");
-
-      lastPosition.current = null;
-      lastAnnouncedDistance.current = 0;
-      lastSplitElapsed.current = 0;
-    }
-  }
-
-  async function createEvent(event) {
-    event.preventDefault();
-
-    try {
-      if (!eventForm.title || !eventForm.startsAt) {
-        throw new Error("Fyll i namn och starttid.");
-      }
-
-      const startsAt = new Date(eventForm.startsAt);
-
-      if (startsAt <= new Date()) {
-        throw new Error("Starttiden måste ligga i framtiden.");
-      }
-
-      const eventDate = startsAt.toISOString().slice(0, 10);
-
-      const { data: createdEvent, error } = await supabase
-        .from("group_events")
-        .insert({
-          created_by: session.user.id,
-          title: eventForm.title.trim(),
-          description:
-            eventForm.description.trim() || null,
-          activity_type: eventForm.activityType,
-          event_date: eventDate,
-          starts_at: startsAt.toISOString(),
-          ends_at: null,
-          join_deadline: null,
-          location_name:
-            eventForm.locationName.trim() || null,
-          status: "open",
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      const { error: joinError } = await supabase.rpc(
-        "join_group_event",
-        {
-          p_event_id: createdEvent.id,
-        }
-      );
-
-      if (joinError) {
-        console.error(joinError);
-        notify(
-          "Eventet skapades, men automatisk anmälan misslyckades."
-        );
-      } else {
-        notify(
-          "Eventet skapades och du är automatiskt anmäld."
-        );
-      }
-
-      setEventDialog(false);
-      setEventForm(initialEventForm);
-
-      await loadEvents(session.user.id);
-    } catch (error) {
-      console.error(error);
-      notifyError(error.message);
-    }
-  }
-
-  async function joinOpenEvent(eventId) {
-    try {
-      const { error } = await supabase.rpc(
-        "join_group_event",
-        {
-          p_event_id: eventId,
-        }
-      );
-
-      if (error) throw error;
-
-      await loadEvents(session.user.id);
-
-      notify("Du är nu anmäld till eventet.");
     } catch (error) {
       console.error(error);
 
       notifyError(
         error.message ||
-          "Det gick inte att anmäla dig."
+          "Aktiviteten kunde inte sparas."
+      );
+    } finally {
+      setTracking(false);
+      setPaused(false);
+
+      setElapsedSeconds(0);
+      setDistanceKilometers(0);
+
+      setPositions([]);
+      setSplits([]);
+
+      setSelectedEventId("");
+
+      lastPosition.current =
+        null;
+    }
+  }
+
+  async function createEvent(
+    event
+  ) {
+    event.preventDefault();
+
+    try {
+      if (
+        !eventForm.title ||
+        !eventForm.startsAt
+      ) {
+        throw new Error(
+          "Fyll i namn och starttid."
+        );
+      }
+
+      const startsAt =
+        new Date(
+          eventForm.startsAt
+        );
+
+      if (
+        startsAt <= new Date()
+      ) {
+        throw new Error(
+          "Starttiden måste ligga i framtiden."
+        );
+      }
+
+      const eventDate =
+        startsAt
+          .toISOString()
+          .slice(0, 10);
+
+      const {
+        data: createdEvent,
+        error,
+      } =
+        await supabase
+          .from("group_events")
+          .insert({
+            created_by:
+              session.user.id,
+
+            title:
+              eventForm.title.trim(),
+
+            description:
+              eventForm.description.trim() ||
+              null,
+
+            activity_type:
+              eventForm.activityType,
+
+            event_date:
+              eventDate,
+
+            starts_at:
+              startsAt.toISOString(),
+
+            ends_at: null,
+
+            join_deadline:
+              null,
+
+            location_name:
+              eventForm.locationName.trim() ||
+              null,
+
+            status: "open",
+          })
+          .select()
+          .single();
+
+      if (error) throw error;
+
+      const {
+        error: joinError,
+      } =
+        await supabase.rpc(
+          "join_group_event",
+          {
+            p_event_id:
+              createdEvent.id,
+          }
+        );
+
+      if (joinError) {
+        throw joinError;
+      }
+
+      setEventDialog(false);
+      setEventForm(
+        initialEventForm
+      );
+
+      await loadEvents(
+        session.user.id
+      );
+
+      notify(
+        "Eventet skapades och du är anmäld."
+      );
+    } catch (error) {
+      console.error(error);
+
+      notifyError(
+        error.message
       );
     }
   }
 
-  async function respondToInvite(inviteId, response) {
-    const { error } = await supabase.rpc(
-      "respond_to_group_event",
-      {
-        p_invite_id: inviteId,
-        p_response: response,
-      }
+  async function joinOpenEvent(
+    eventId
+  ) {
+    try {
+      const { error } =
+        await supabase.rpc(
+          "join_group_event",
+          {
+            p_event_id:
+              eventId,
+          }
+        );
+
+      if (error) throw error;
+
+      await loadEvents(
+        session.user.id
+      );
+
+      notify(
+        "Du är nu anmäld till eventet."
+      );
+    } catch (error) {
+      console.error(error);
+
+      notifyError(
+        error.message ||
+          "Anmälan misslyckades."
+      );
+    }
+  }
+
+  async function recheckEvent(
+    eventId
+  ) {
+    setCheckingEventId(
+      eventId
     );
 
+    try {
+      const {
+        data,
+        error,
+      } =
+        await supabase.rpc(
+          "recheck_my_group_event",
+          {
+            p_event_id:
+              eventId,
+          }
+        );
+
+      if (error) {
+        throw error;
+      }
+
+      await refreshEventPage();
+
+      const verified =
+        Number(
+          data?.verified_participants ||
+            0
+        );
+
+      if (verified >= 2) {
+        notify(
+          `${verified} deltagare verifierade. Gruppbonus uppdaterad.`
+        );
+      } else {
+        notify(
+          "Kontrollen är klar. Pulsly väntar fortfarande på fler matchande aktiviteter."
+        );
+      }
+    } catch (error) {
+      console.error(error);
+
+      notifyError(
+        error.message ||
+          "Verifieringen kunde inte köras."
+      );
+    } finally {
+      setCheckingEventId(
+        null
+      );
+    }
+  }
+
+  async function respondToInvite(
+    inviteId,
+    response
+  ) {
+    const { error } =
+      await supabase.rpc(
+        "respond_to_group_event",
+        {
+          p_invite_id:
+            inviteId,
+
+          p_response:
+            response,
+        }
+      );
+
     if (error) {
-      notifyError(error.message);
+      notifyError(
+        error.message
+      );
+
       return;
     }
 
-    await loadEvents(session.user.id);
+    await loadEvents(
+      session.user.id
+    );
 
     notify(
       response === "accepted"
-        ? "Du är nu anmäld till eventet."
-        : "Du har avböjt eventet."
+        ? "Du är nu anmäld."
+        : "Du har avböjt."
     );
   }
 
   async function publishActivity() {
-    if (!completedActivity) return;
+    if (!completedActivity) {
+      return;
+    }
 
     try {
-      const { data: post, error } = await supabase
-        .from("activity_posts")
-        .insert({
-          activity_id: completedActivity.id,
-          user_id: session.user.id,
-          message: shareMessage.trim() || null,
-          visibility: shareVisibility,
-          share_route: shareRoute,
-          hide_route_start: true,
-          hide_route_end: true,
-          privacy_radius_meters: 200,
-          share_splits: shareSplits,
-          share_points: true,
-          share_pace: true,
-        })
-        .select()
-        .single();
+      const {
+        data: post,
+        error,
+      } =
+        await supabase
+          .from(
+            "activity_posts"
+          )
+          .insert({
+            activity_id:
+              completedActivity.id,
+
+            user_id:
+              session.user.id,
+
+            message:
+              shareMessage.trim() ||
+              null,
+
+            visibility:
+              shareVisibility,
+
+            share_route:
+              shareRoute,
+
+            hide_route_start:
+              true,
+
+            hide_route_end:
+              true,
+
+            privacy_radius_meters:
+              200,
+
+            share_splits:
+              shareSplits,
+
+            share_points:
+              true,
+
+            share_pace:
+              true,
+          })
+          .select()
+          .single();
 
       if (error) throw error;
 
       if (
         shareRoute &&
-        completedActivity.savedPositions?.length > 0
+        completedActivity
+          .savedPositions
+          ?.length > 0
       ) {
         const allPoints =
-          completedActivity.savedPositions;
+          completedActivity
+            .savedPositions;
 
         const pointsToShare =
           allPoints.length > 10
-            ? allPoints.slice(2, -2)
+            ? allPoints.slice(
+                2,
+                -2
+              )
             : allPoints;
 
-        const routeRows = pointsToShare.map(
-          (point, index) => ({
-            post_id: post.id,
-            activity_id: completedActivity.id,
-            user_id: session.user.id,
-            route_order: index,
-            latitude: point.latitude,
-            longitude: point.longitude,
-          })
-        );
+        await supabase
+          .from(
+            "activity_post_routes"
+          )
+          .insert(
+            pointsToShare.map(
+              (
+                point,
+                index
+              ) => ({
+                post_id:
+                  post.id,
 
-        const { error: routeError } = await supabase
-          .from("activity_post_routes")
-          .insert(routeRows);
+                activity_id:
+                  completedActivity.id,
 
-        if (routeError) {
-          throw routeError;
-        }
+                user_id:
+                  session.user.id,
+
+                route_order:
+                  index,
+
+                latitude:
+                  point.latitude,
+
+                longitude:
+                  point.longitude,
+              })
+            )
+          );
       }
 
       setShareDialog(false);
-      setCompletedActivity(null);
+      setCompletedActivity(
+        null
+      );
+
       setShareMessage("");
       setShareRoute(false);
       setShareSplits(true);
@@ -1084,73 +1797,106 @@ export default function App() {
       await loadPosts();
 
       setPage("wall");
-      notify("Aktiviteten publicerades på väggen.");
+
+      notify(
+        "Aktiviteten publicerades."
+      );
     } catch (error) {
       console.error(error);
 
       notifyError(
-        `Inlägget kunde inte publiceras: ${
-          error.message || "okänt fel"
-        }`
+        error.message
       );
     }
   }
 
   async function toggleLike(post) {
-    const hasLiked =
+    const liked =
       post.activity_post_likes?.some(
         (like) =>
-          like.user_id === session.user.id
+          like.user_id ===
+          session.user.id
       );
 
-    if (hasLiked) {
+    if (liked) {
       await supabase
-        .from("activity_post_likes")
+        .from(
+          "activity_post_likes"
+        )
         .delete()
-        .eq("post_id", post.id)
-        .eq("user_id", session.user.id);
+        .eq(
+          "post_id",
+          post.id
+        )
+        .eq(
+          "user_id",
+          session.user.id
+        );
     } else {
       await supabase
-        .from("activity_post_likes")
+        .from(
+          "activity_post_likes"
+        )
         .insert({
-          post_id: post.id,
-          user_id: session.user.id,
+          post_id:
+            post.id,
+
+          user_id:
+            session.user.id,
         });
     }
 
     await loadPosts();
   }
 
-  async function saveVoiceSettings(nextValues) {
+  async function saveVoiceSettings(
+    nextValues
+  ) {
     const nextSettings = {
       ...settings,
       ...nextValues,
-      user_id: session.user.id,
-      updated_at: new Date().toISOString(),
+
+      user_id:
+        session.user.id,
+
+      updated_at:
+        new Date().toISOString(),
     };
 
-    setSettings(nextSettings);
+    setSettings(
+      nextSettings
+    );
 
-    const { error } = await supabase
-      .from("user_settings")
-      .upsert(nextSettings, {
-        onConflict: "user_id",
-      });
+    const { error } =
+      await supabase
+        .from(
+          "user_settings"
+        )
+        .upsert(
+          nextSettings,
+          {
+            onConflict:
+              "user_id",
+          }
+        );
 
     if (error) {
-      notifyError(error.message);
+      notifyError(
+        error.message
+      );
+
       return;
     }
 
-    notify("Röstinställningarna sparades.");
+    notify(
+      "Röstinställningarna sparades."
+    );
   }
 
   async function signOut() {
     stopGpsWatcher();
 
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
+    window.speechSynthesis?.cancel();
 
     await supabase.auth.signOut();
 
@@ -1159,27 +1905,40 @@ export default function App() {
     setPage("home");
   }
 
-  const acceptedEventIds = new Set(
-    invites
-      .filter(
-        (invite) =>
-          invite.status === "accepted"
-      )
-      .map((invite) => invite.event_id)
-  );
+  const acceptedEventIds =
+    new Set(
+      invites
+        .filter(
+          (invite) =>
+            invite.status ===
+            "accepted"
+        )
+        .map(
+          (invite) =>
+            invite.event_id
+        )
+    );
 
   const upcomingAcceptedEvents =
     events.filter(
       (event) =>
-        acceptedEventIds.has(event.id) &&
-        new Date(event.starts_at) > new Date()
+        acceptedEventIds.has(
+          event.id
+        ) &&
+        new Date(
+          event.starts_at
+        ) > new Date()
     );
 
   const navigation = [
     ["home", "Hem", Home],
     ["wall", "Vägg", Heart],
     ["track", "Spåra", MapPin],
-    ["events", "Event", CalendarDays],
+    [
+      "events",
+      "Event",
+      CalendarDays,
+    ],
     ["profile", "Profil", User],
   ];
 
@@ -1214,7 +1973,9 @@ export default function App() {
       <header>
         <button
           className="logo"
-          onClick={() => setPage("home")}
+          onClick={() =>
+            setPage("home")
+          }
         >
           <span>
             <Activity size={23} />
@@ -1225,13 +1986,21 @@ export default function App() {
 
         <nav>
           {navigation.map(
-            ([id, label, Icon]) => (
+            ([
+              id,
+              label,
+              Icon,
+            ]) => (
               <button
                 key={id}
                 className={
-                  page === id ? "active" : ""
+                  page === id
+                    ? "active"
+                    : ""
                 }
-                onClick={() => setPage(id)}
+                onClick={() =>
+                  setPage(id)
+                }
               >
                 <Icon size={17} />
                 {label}
@@ -1242,7 +2011,9 @@ export default function App() {
 
         <button
           className="avatar-button"
-          onClick={() => setPage("profile")}
+          onClick={() =>
+            setPage("profile")
+          }
         >
           {initials(fullName)}
         </button>
@@ -1257,18 +2028,23 @@ export default function App() {
                   PULSLY
                 </span>
 
-                <h1>Hej {firstName}! 👋</h1>
+                <h1>
+                  Hej {firstName}! 👋
+                </h1>
 
                 <p>
-                  All verifierad aktivitet
-                  räknas. Ingen daglig
+                  All verifierad
+                  aktivitet räknas.
+                  Ingen daglig
                   poänggräns.
                 </p>
               </div>
 
               <button
                 className="primary"
-                onClick={() => setPage("track")}
+                onClick={() =>
+                  setPage("track")
+                }
               >
                 <Play size={18} />
                 Starta aktivitet
@@ -1316,95 +2092,66 @@ export default function App() {
 
             <div className="dashboard-grid">
               <Card>
-                <div className="section-header">
-                  <div>
-                    <h2>Aktivitetsvägg</h2>
-                    <p>
-                      Se vad medlemmarna har delat.
-                    </p>
-                  </div>
-
-                  <button
-                    className="icon-button"
-                    onClick={() => setPage("wall")}
-                  >
-                    <ChevronRight />
-                  </button>
-                </div>
+                <h2>Aktivitetsvägg</h2>
 
                 {posts.length === 0 ? (
                   <div className="empty">
                     <Share2 size={36} />
+
                     <strong>
                       Inga inlägg ännu
                     </strong>
+
                     <span>
-                      Avsluta en aktivitet och
-                      välj att dela den.
+                      Avsluta en
+                      aktivitet och dela
+                      den på väggen.
                     </span>
                   </div>
                 ) : (
-                  posts.slice(0, 3).map((post) => (
-                    <div
-                      className="mini-row"
-                      key={post.id}
-                    >
-                      <div>
-                        <strong>
-                          {post.profiles?.full_name ||
-                            "Pulsly-medlem"}
-                        </strong>
+                  posts
+                    .slice(0, 3)
+                    .map((post) => (
+                      <div
+                        className="mini-row"
+                        key={post.id}
+                      >
+                        <div>
+                          <strong>
+                            {post
+                              .profiles
+                              ?.full_name ||
+                              "Pulsly-medlem"}
+                          </strong>
 
-                        <span>
-                          {
-                            post.activities
-                              ?.activity_type
-                          }
-                        </span>
+                          <span>
+                            {
+                              post
+                                .activities
+                                ?.activity_type
+                            }
+                          </span>
+                        </div>
+
+                        <ChevronRight />
                       </div>
-
-                      <span>
-                        {(
-                          Number(
-                            post.activities
-                              ?.distance_meters || 0
-                          ) / 1000
-                        ).toFixed(2)}{" "}
-                        km
-                      </span>
-                    </div>
-                  ))
+                    ))
                 )}
               </Card>
 
               <Card>
-                <div className="section-header">
-                  <div>
-                    <h2>Kommande event</h2>
+                <h2>Kommande event</h2>
 
-                    <p>
-                      Anmälan är öppen fram
-                      till eventets start.
-                    </p>
-                  </div>
-
-                  <button
-                    className="icon-button"
-                    onClick={() => setPage("events")}
-                  >
-                    <ChevronRight />
-                  </button>
-                </div>
-
-                {events.length === 0 ? (
-                  <div className="empty">
-                    <CalendarDays size={34} />
-                    <strong>
-                      Inga event ännu
-                    </strong>
-                  </div>
-                ) : (
-                  events.slice(0, 3).map((event) => (
+                {events
+                  .filter(
+                    (event) =>
+                      new Date(
+                        event.starts_at
+                      ) >
+                      new Date()
+                  )
+                  .slice(0, 3)
+                  .map((event) => (
                     <div
                       className="mini-row"
                       key={event.id}
@@ -1422,11 +2169,12 @@ export default function App() {
                       </div>
 
                       <span className="pill">
-                        {event.activity_type}
+                        {
+                          event.activity_type
+                        }
                       </span>
                     </div>
-                  ))
-                )}
+                  ))}
               </Card>
             </div>
           </>
@@ -1440,12 +2188,14 @@ export default function App() {
                   LIVE TRACKING
                 </span>
 
-                <h1>Spåra aktivitet</h1>
+                <h1>
+                  Spåra aktivitet
+                </h1>
 
                 <p>
-                  Pulsly registrerar GPS,
-                  tid, tempo, hastighet och
-                  kilometerpasseringar.
+                  GPS, distans, tempo
+                  och kilometertider
+                  registreras live.
                 </p>
               </div>
             </section>
@@ -1454,90 +2204,135 @@ export default function App() {
               <Card>
                 <ActivityMap
                   positions={positions}
-                  active={tracking && !paused}
+                  active={
+                    tracking &&
+                    !paused
+                  }
                 />
 
-                {splits.length > 0 && (
+                {splits.length >
+                  0 && (
                   <div className="splits">
-                    <h3>Kilometertider</h3>
+                    <h3>
+                      Kilometertider
+                    </h3>
 
-                    {splits.map((split) => (
-                      <div
-                        key={split.split_number}
-                      >
-                        <strong>
-                          {split.split_number} km
-                        </strong>
+                    {splits.map(
+                      (split) => (
+                        <div
+                          key={
+                            split.split_number
+                          }
+                        >
+                          <strong>
+                            {
+                              split.split_number
+                            }{" "}
+                            km
+                          </strong>
 
-                        <span>
-                          {formatPace(
-                            split.pace_seconds_per_km
-                          )}
-                          /km
-                        </span>
+                          <span>
+                            {formatPace(
+                              split.pace_seconds_per_km
+                            )}
+                            /km
+                          </span>
 
-                        <span>
-                          {formatDuration(
-                            split.elapsed_seconds
-                          )}
-                        </span>
-                      </div>
-                    ))}
+                          <span>
+                            {formatDuration(
+                              split.elapsed_seconds
+                            )}
+                          </span>
+                        </div>
+                      )
+                    )}
                   </div>
                 )}
               </Card>
 
               <Card>
-                <h2>Välj aktivitet</h2>
+                <h2>
+                  Välj aktivitet
+                </h2>
 
                 <div className="activity-selector">
-                  {activityTypes.map((type) => {
-                    const Icon = type.icon;
+                  {activityTypes.map(
+                    (type) => {
+                      const Icon =
+                        type.icon;
 
-                    return (
-                      <button
-                        key={type.id}
-                        disabled={tracking}
-                        className={
-                          activityType.id === type.id
-                            ? "selected"
-                            : ""
-                        }
-                        onClick={() =>
-                          setActivityType(type)
-                        }
-                      >
-                        <Icon size={21} />
-                        {type.name}
-                      </button>
-                    );
-                  })}
+                      return (
+                        <button
+                          key={
+                            type.id
+                          }
+                          disabled={
+                            tracking
+                          }
+                          className={
+                            activityType.id ===
+                            type.id
+                              ? "selected"
+                              : ""
+                          }
+                          onClick={() =>
+                            setActivityType(
+                              type
+                            )
+                          }
+                        >
+                          <Icon
+                            size={21}
+                          />
+
+                          {type.name}
+                        </button>
+                      );
+                    }
+                  )}
                 </div>
 
                 <label className="field">
-                  Koppla till gruppevent
+                  Gruppevent
 
                   <select
-                    disabled={tracking}
-                    value={selectedEventId}
-                    onChange={(event) =>
+                    disabled={
+                      tracking
+                    }
+                    value={
+                      selectedEventId
+                    }
+                    onChange={(
+                      event
+                    ) =>
                       setSelectedEventId(
-                        event.target.value
+                        event.target
+                          .value
                       )
                     }
                   >
                     <option value="">
-                      Ingen gruppaktivitet
+                      Ingen
+                      gruppaktivitet
                     </option>
 
                     {upcomingAcceptedEvents.map(
                       (event) => (
                         <option
-                          key={event.id}
-                          value={event.id}
+                          key={
+                            event.id
+                          }
+                          value={
+                            event.id
+                          }
                         >
-                          {event.title} ·{" "}
-                          {event.activity_type}
+                          {
+                            event.title
+                          }{" "}
+                          ·{" "}
+                          {
+                            event.activity_type
+                          }
                         </option>
                       )
                     )}
@@ -1545,8 +2340,13 @@ export default function App() {
                 </label>
 
                 <div className="timer">
-                  {formatDuration(elapsedSeconds)}
-                  <span>Aktiv tid</span>
+                  {formatDuration(
+                    elapsedSeconds
+                  )}
+
+                  <span>
+                    Aktiv tid
+                  </span>
                 </div>
 
                 <div className="tracker-metrics">
@@ -1579,7 +2379,9 @@ export default function App() {
                   <Metric
                     icon={Zap}
                     label="Grundpoäng"
-                    value={currentPoints}
+                    value={
+                      currentPoints
+                    }
                   />
                 </div>
 
@@ -1587,22 +2389,24 @@ export default function App() {
                   <div className="pending-bonus">
                     <Users size={18} />
 
-                    <span>
-                      Eventaktivitet. 1,5×
-                      tilldelas först när
-                      aktiviteterna från minst
-                      två anmälda deltagare har
-                      verifierats som liknande.
-                    </span>
+                    1,5× tilldelas
+                    automatiskt efter
+                    verifierad
+                    gruppaktivitet.
                   </div>
                 )}
 
                 {!tracking ? (
                   <button
                     className="primary full"
-                    onClick={startTracking}
+                    onClick={
+                      startTracking
+                    }
                   >
-                    <Play size={19} />
+                    <Play
+                      size={19}
+                    />
+
                     Starta GPS
                   </button>
                 ) : (
@@ -1611,14 +2415,15 @@ export default function App() {
                       className="secondary"
                       onClick={() =>
                         setPaused(
-                          (value) => !value
+                          (value) =>
+                            !value
                         )
                       }
                     >
                       {paused ? (
-                        <Play size={18} />
+                        <Play />
                       ) : (
-                        <Pause size={18} />
+                        <Pause />
                       )}
 
                       {paused
@@ -1628,9 +2433,11 @@ export default function App() {
 
                     <button
                       className="danger"
-                      onClick={finishActivity}
+                      onClick={
+                        finishActivity
+                      }
                     >
-                      <Square size={18} />
+                      <Square />
                       Avsluta
                     </button>
                   </div>
@@ -1651,17 +2458,19 @@ export default function App() {
                 <h1>Event</h1>
 
                 <p>
-                  Anmäl dig före start. Efter
-                  start jämför Pulsly
-                  deltagarnas verifierade
-                  aktiviteter.
+                  Anmäl före start.
+                  Pulsly verifierar
+                  aktiviteterna
+                  automatiskt.
                 </p>
               </div>
 
               <button
                 className="primary"
                 onClick={() =>
-                  setEventDialog(true)
+                  setEventDialog(
+                    true
+                  )
                 }
               >
                 <Plus size={18} />
@@ -1669,183 +2478,140 @@ export default function App() {
               </button>
             </section>
 
-            {invites.some(
-              (invite) =>
-                invite.status === "invited"
-            ) && (
-              <Card className="invite-card">
-                <h2>Inbjudningar</h2>
+            <div className="event-grid">
+              {events.map(
+                (event) => {
+                  const invite =
+                    invites.find(
+                      (item) =>
+                        item.event_id ===
+                        event.id
+                    );
 
-                {invites
-                  .filter(
-                    (invite) =>
-                      invite.status === "invited"
-                  )
-                  .map((invite) => (
-                    <div
-                      className="invite-row"
-                      key={invite.id}
+                  const isJoined =
+                    invite?.status ===
+                    "accepted";
+
+                  const hasStarted =
+                    new Date(
+                      event.starts_at
+                    ) <= new Date();
+
+                  const summary =
+                    eventSummaries[
+                      event.id
+                    ];
+
+                  const personal =
+                    personalEventStatuses[
+                      event.id
+                    ];
+
+                  return (
+                    <Card
+                      key={event.id}
                     >
-                      <div>
-                        <strong>
-                          {
-                            invite.group_events
-                              ?.title
-                          }
-                        </strong>
+                      <div className="event-card-top">
+                        <span className="event-icon">
+                          <CalendarDays />
+                        </span>
 
-                        <span>
-                          {formatDate(
-                            invite.group_events
-                              ?.starts_at
-                          )}
+                        <span className="pill">
+                          {summary?.status ===
+                          "completed"
+                            ? "Verifierat"
+                            : hasStarted
+                            ? "Startat"
+                            : "Öppet"}
                         </span>
                       </div>
 
-                      <div className="invite-actions">
-                        <button
-                          className="accept"
-                          onClick={() =>
-                            respondToInvite(
-                              invite.id,
-                              "accepted"
-                            )
-                          }
-                        >
-                          <Check size={18} />
-                          Acceptera
-                        </button>
+                      <h2>
+                        {event.title}
+                      </h2>
 
-                        <button
-                          className="decline"
-                          onClick={() =>
-                            respondToInvite(
-                              invite.id,
-                              "declined"
-                            )
+                      <p>
+                        {event.description ||
+                          event.activity_type}
+                      </p>
+
+                      <div className="event-details">
+                        <span>
+                          <Clock
+                            size={16}
+                          />
+                          {formatDate(
+                            event.starts_at
+                          )}
+                        </span>
+
+                        <span>
+                          <Activity
+                            size={16}
+                          />
+                          {
+                            event.activity_type
                           }
-                        >
-                          <X size={18} />
-                        </button>
+                        </span>
+
+                        <span>
+                          <MapPin
+                            size={16}
+                          />
+                          {event.location_name ||
+                            "Plats ej angiven"}
+                        </span>
                       </div>
-                    </div>
-                  ))}
-              </Card>
-            )}
 
-            <div className="event-grid">
-              {events.map((event) => {
-                const invite = invites.find(
-                  (item) =>
-                    item.event_id === event.id
-                );
+                      {isJoined ? (
+                        <div className="joined">
+                          <CheckCircle2
+                            size={17}
+                          />
+                          Du är anmäld
+                        </div>
+                      ) : !hasStarted ? (
+                        <button
+                          className="primary full"
+                          onClick={() =>
+                            joinOpenEvent(
+                              event.id
+                            )
+                          }
+                        >
+                          Gå med
+                        </button>
+                      ) : (
+                        <div className="closed">
+                          Anmälan
+                          stängd
+                        </div>
+                      )}
 
-                const hasStarted =
-                  new Date(event.starts_at) <=
-                  new Date();
-
-                const isCreator =
-                  event.created_by ===
-                  session.user.id;
-
-                const isJoined =
-                  invite?.status === "accepted";
-
-                return (
-                  <Card key={event.id}>
-                    <div className="event-card-top">
-                      <span className="event-icon">
-                        <CalendarDays />
-                      </span>
-
-                      <span
-                        className={`pill ${
-                          hasStarted
-                            ? "started"
-                            : ""
-                        }`}
-                      >
-                        {event.status ===
-                        "cancelled"
-                          ? "Inställt"
-                          : hasStarted
-                            ? "Startat"
-                            : "Anmälan öppen"}
-                      </span>
-                    </div>
-
-                    <h2>{event.title}</h2>
-
-                    <p>
-                      {event.description ||
-                        event.activity_type}
-                    </p>
-
-                    <div className="event-details">
-                      <span>
-                        <Clock size={16} />
-                        {formatDate(
-                          event.starts_at
+                      {hasStarted &&
+                        isJoined && (
+                          <VerificationPanel
+                            summary={
+                              summary
+                            }
+                            personalStatus={
+                              personal
+                            }
+                            loading={
+                              checkingEventId ===
+                              event.id
+                            }
+                            onRecheck={() =>
+                              recheckEvent(
+                                event.id
+                              )
+                            }
+                          />
                         )}
-                      </span>
-
-                      <span>
-                        <MapPin size={16} />
-                        {event.location_name ||
-                          "Plats ej angiven"}
-                      </span>
-
-                      <span>
-                        <Activity size={16} />
-                        {event.activity_type}
-                      </span>
-
-                      <span>
-                        <Users size={16} />
-                        Minst{" "}
-                        {
-                          event.minimum_participants
-                        }{" "}
-                        verifierade deltagare
-                      </span>
-                    </div>
-
-                    {isJoined ? (
-                      <div className="joined">
-                        <CheckCircle2 size={18} />
-                        Du är anmäld
-                      </div>
-                    ) : isCreator ? (
-                      <button
-                        className="primary full"
-                        disabled={hasStarted}
-                        onClick={() =>
-                          joinOpenEvent(event.id)
-                        }
-                      >
-                        {hasStarted
-                          ? "Eventet har startat"
-                          : "Anmäl mig till mitt event"}
-                      </button>
-                    ) : !hasStarted &&
-                      event.status !==
-                        "cancelled" ? (
-                      <button
-                        className="primary full"
-                        onClick={() =>
-                          joinOpenEvent(event.id)
-                        }
-                      >
-                        Gå med
-                      </button>
-                    ) : (
-                      <div className="closed">
-                        Anmälan stängd
-                      </div>
-                    )}
-                  </Card>
-                );
-              })}
+                    </Card>
+                  );
+                }
+              )}
             </div>
           </>
         )}
@@ -1858,12 +2624,14 @@ export default function App() {
                   AKTIVITETSVÄGG
                 </span>
 
-                <h1>Pulsly-väggen</h1>
+                <h1>
+                  Pulsly-väggen
+                </h1>
 
                 <p>
-                  Medlemmen bestämmer själv om
-                  aktivitet och GPS-rutt ska
-                  delas.
+                  Dela aktivitet,
+                  resultat och valfri
+                  GPS-rutt.
                 </p>
               </div>
 
@@ -1871,7 +2639,9 @@ export default function App() {
                 className="secondary"
                 onClick={loadPosts}
               >
-                <RefreshCw size={18} />
+                <RefreshCw
+                  size={18}
+                />
                 Uppdatera
               </button>
             </section>
@@ -1880,173 +2650,169 @@ export default function App() {
               {posts.length === 0 ? (
                 <Card>
                   <div className="empty">
-                    <Share2 size={42} />
+                    <Share2
+                      size={42}
+                    />
 
                     <strong>
                       Väggen är tom
                     </strong>
-
-                    <span>
-                      Avsluta en aktivitet och
-                      välj att dela den.
-                    </span>
                   </div>
                 </Card>
               ) : (
-                posts.map((post) => {
-                  const activity =
-                    post.activities || {};
+                posts.map(
+                  (post) => {
+                    const activity =
+                      post.activities ||
+                      {};
 
-                  const likes =
-                    post.activity_post_likes ||
-                    [];
+                    const likes =
+                      post.activity_post_likes ||
+                      [];
 
-                  const comments =
-                    post.activity_post_comments ||
-                    [];
+                    const liked =
+                      likes.some(
+                        (like) =>
+                          like.user_id ===
+                          session.user.id
+                      );
 
-                  const likedByMe =
-                    likes.some(
-                      (like) =>
-                        like.user_id ===
-                        session.user.id
-                    );
-
-                  return (
-                    <Card
-                      className="post"
-                      key={post.id}
-                    >
-                      <div className="post-header">
-                        <div className="post-avatar">
-                          {initials(
-                            post.profiles
-                              ?.full_name
-                          )}
-                        </div>
-
-                        <div>
-                          <strong>
-                            {post.profiles
-                              ?.full_name ||
-                              "Pulsly-medlem"}
-                          </strong>
-
-                          <span>
-                            {formatDate(
-                              post.created_at
+                    return (
+                      <Card
+                        className="post"
+                        key={
+                          post.id
+                        }
+                      >
+                        <div className="post-header">
+                          <div className="post-avatar">
+                            {initials(
+                              post
+                                .profiles
+                                ?.full_name
                             )}
-                          </span>
+                          </div>
+
+                          <div>
+                            <strong>
+                              {post
+                                .profiles
+                                ?.full_name ||
+                                "Pulsly-medlem"}
+                            </strong>
+
+                            <span>
+                              {formatDate(
+                                post.created_at
+                              )}
+                            </span>
+                          </div>
+
+                          {activity.verified && (
+                            <ShieldCheck className="verified-icon" />
+                          )}
                         </div>
 
-                        {activity.verified && (
-                          <ShieldCheck
-                            className="verified-icon"
-                            size={21}
-                          />
-                        )}
-                      </div>
-
-                      {post.message && (
-                        <p className="post-message">
-                          {post.message}
-                        </p>
-                      )}
-
-                      <h2>
-                        {activity.activity_type}
-                      </h2>
-
-                      <div className="post-metrics">
-                        <Metric
-                          icon={Route}
-                          label="Distans"
-                          value={`${(
-                            Number(
-                              activity.distance_meters ||
-                                0
-                            ) / 1000
-                          ).toFixed(2)} km`}
-                        />
-
-                        <Metric
-                          icon={Timer}
-                          label="Tid"
-                          value={formatDuration(
-                            activity.duration_seconds
-                          )}
-                        />
-
-                        <Metric
-                          icon={Clock}
-                          label="Tempo"
-                          value={
-                            activity.average_pace_seconds_per_km
-                              ? `${formatPace(
-                                  activity.average_pace_seconds_per_km
-                                )}/km`
-                              : `${Number(
-                                  activity.average_speed_kmh ||
-                                    0
-                                ).toFixed(
-                                  1
-                                )} km/h`
-                          }
-                        />
-
-                        <Metric
-                          icon={Zap}
-                          label="Poäng"
-                          value={Number(
-                            activity.points || 0
-                          ).toLocaleString(
-                            "sv-SE"
-                          )}
-                        />
-                      </div>
-
-                      {post.share_route && (
-                        <ActivityMap />
-                      )}
-
-                      <div className="post-actions">
-                        <button
-                          className={
-                            likedByMe
-                              ? "liked"
-                              : ""
-                          }
-                          onClick={() =>
-                            toggleLike(post)
-                          }
-                        >
-                          <Heart
-                            size={20}
-                            fill={
-                              likedByMe
-                                ? "currentColor"
-                                : "none"
+                        {post.message && (
+                          <p>
+                            {
+                              post.message
                             }
+                          </p>
+                        )}
+
+                        <h2>
+                          {
+                            activity.activity_type
+                          }
+                        </h2>
+
+                        <div className="post-metrics">
+                          <Metric
+                            icon={
+                              Route
+                            }
+                            label="Distans"
+                            value={`${(
+                              Number(
+                                activity.distance_meters ||
+                                  0
+                              ) /
+                              1000
+                            ).toFixed(
+                              2
+                            )} km`}
                           />
 
-                          {likes.length}
-                        </button>
-
-                        <button>
-                          <MessageCircle
-                            size={20}
+                          <Metric
+                            icon={
+                              Timer
+                            }
+                            label="Tid"
+                            value={formatDuration(
+                              activity.duration_seconds
+                            )}
                           />
-                          {comments.length}
-                        </button>
 
-                        <button>
-                          <Share2 size={20} />
-                          Dela
-                        </button>
-                      </div>
-                    </Card>
-                  );
-                })
+                          <Metric
+                            icon={
+                              Zap
+                            }
+                            label="Poäng"
+                            value={Number(
+                              activity.points ||
+                                0
+                            ).toLocaleString(
+                              "sv-SE"
+                            )}
+                          />
+                        </div>
+
+                        {post.share_route && (
+                          <ActivityMap />
+                        )}
+
+                        <div className="post-actions">
+                          <button
+                            className={
+                              liked
+                                ? "liked"
+                                : ""
+                            }
+                            onClick={() =>
+                              toggleLike(
+                                post
+                              )
+                            }
+                          >
+                            <Heart
+                              size={
+                                20
+                              }
+                              fill={
+                                liked
+                                  ? "currentColor"
+                                  : "none"
+                              }
+                            />
+
+                            {
+                              likes.length
+                            }
+                          </button>
+
+                          <button>
+                            <MessageCircle
+                              size={
+                                20
+                              }
+                            />
+                          </button>
+                        </div>
+                      </Card>
+                    );
+                  }
+                )
               )}
             </div>
           </>
@@ -2060,34 +2826,43 @@ export default function App() {
                   MIN PROFIL
                 </span>
 
-                <h1>{fullName}</h1>
+                <h1>
+                  {fullName}
+                </h1>
 
-                <p>{session.user.email}</p>
+                <p>
+                  {
+                    session.user
+                      .email
+                  }
+                </p>
               </div>
             </section>
 
             <div className="profile-grid">
               <Card className="profile-card">
                 <div className="large-avatar">
-                  {initials(fullName)}
+                  {initials(
+                    fullName
+                  )}
                 </div>
 
-                <h2>{fullName}</h2>
+                <h2>
+                  {fullName}
+                </h2>
 
                 <p>
                   {profile?.department ||
                     "Pulsly-medlem"}
-
-                  {profile?.location
-                    ? ` · ${profile.location}`
-                    : ""}
                 </p>
 
                 <button
                   className="logout"
                   onClick={signOut}
                 >
-                  <LogOut size={18} />
+                  <LogOut
+                    size={18}
+                  />
                   Logga ut
                 </button>
               </Card>
@@ -2095,11 +2870,13 @@ export default function App() {
               <Card>
                 <div className="section-header">
                   <div>
-                    <h2>Röstcoach</h2>
+                    <h2>
+                      Röstcoach
+                    </h2>
 
                     <p>
-                      Distans, tid och tempo
-                      läses upp under
+                      Distans, tid och
+                      tempo under
                       aktiviteten.
                     </p>
                   </div>
@@ -2111,10 +2888,12 @@ export default function App() {
                         : ""
                     }`}
                     onClick={() =>
-                      saveVoiceSettings({
-                        voice_coach_enabled:
-                          !settings?.voice_coach_enabled,
-                      })
+                      saveVoiceSettings(
+                        {
+                          voice_coach_enabled:
+                            !settings?.voice_coach_enabled,
+                        }
+                      )
                     }
                   >
                     {settings?.voice_coach_enabled ? (
@@ -2133,62 +2912,111 @@ export default function App() {
                       settings?.voice_interval_meters ||
                       1000
                     }
-                    onChange={(event) =>
-                      saveVoiceSettings({
-                        voice_interval_meters:
-                          Number(
-                            event.target.value
-                          ),
-                      })
+                    onChange={(
+                      event
+                    ) =>
+                      saveVoiceSettings(
+                        {
+                          voice_interval_meters:
+                            Number(
+                              event
+                                .target
+                                .value
+                            ),
+                        }
+                      )
                     }
                   >
-                    <option value={500}>
+                    <option
+                      value={
+                        500
+                      }
+                    >
                       500 meter
                     </option>
 
-                    <option value={1000}>
+                    <option
+                      value={
+                        1000
+                      }
+                    >
                       1 kilometer
                     </option>
 
-                    <option value={2000}>
+                    <option
+                      value={
+                        2000
+                      }
+                    >
                       2 kilometer
                     </option>
                   </select>
                 </label>
 
-               <div className="setting-list">
-  {[
-    ["voice_total_time", "Total tid"],
-    ["voice_split_time", "Senaste kilometertid"],
-    ["voice_average_pace", "Genomsnittstempo"],
-    ["voice_speed", "Hastighet vid cykling"],
-  ].map(([key, label]) => (
-    <button
-      key={key}
-      onClick={() =>
-        saveVoiceSettings({
-          [key]: !settings?.[key],
-        })
-      }
-    >
-      <span>{label}</span>
+                <div className="setting-list">
+                  {[
+                    [
+                      "voice_total_time",
+                      "Total tid",
+                    ],
+                    [
+                      "voice_split_time",
+                      "Senaste kilometertid",
+                    ],
+                    [
+                      "voice_average_pace",
+                      "Genomsnittstempo",
+                    ],
+                    [
+                      "voice_speed",
+                      "Hastighet vid cykling",
+                    ],
+                  ].map(
+                    ([
+                      key,
+                      label,
+                    ]) => (
+                      <button
+                        key={
+                          key
+                        }
+                        onClick={() =>
+                          saveVoiceSettings(
+                            {
+                              !settings?.[
+                                  key
+                                ],
+                            }
+                          )
+                        }
+                      >
+                        <span>
+                          {
+                            label
+                          }
+                        </span>
 
-      <span
-        className={`switch ${
-          settings?.[key] ? "on" : ""
-        }`}
-      >
-        <i />
-      </span>
-    </button>
-  ))}
-</div>
+                        <span
+                          className={`switch ${
+                            settings?.[
+                              key
+                            ]
+                              ? "on"
+                              : ""
+                          }`}
+                        >
+                          <i />
+                        </span>
+                      </button>
+                    )
+                  )}
+                </div>
 
                 <button
                   className="secondary full"
                   onClick={() =>
                     speak(
-                      "Pulsly röstcoach. En kilometer. Total tid fem minuter och fyrtiotvå sekunder. Genomsnittstempo fem minuter och fyrtiotvå sekunder per kilometer."
+                      "Pulsly röstcoach. En kilometer. Total tid fem minuter och fyrtiotvå sekunder."
                     )
                   }
                 >
@@ -2198,7 +3026,9 @@ export default function App() {
               </Card>
 
               <Card>
-                <h2>Hälsoanslutningar</h2>
+                <h2>
+                  Hälsoanslutningar
+                </h2>
 
                 <div className="health-service">
                   <Smartphone />
@@ -2209,7 +3039,7 @@ export default function App() {
                     </strong>
 
                     <span>
-                      Aktiveras i iPhone-appen
+                      iPhone
                     </span>
                   </div>
                 </div>
@@ -2223,7 +3053,7 @@ export default function App() {
                     </strong>
 
                     <span>
-                      Aktiveras i Android-appen
+                      Android
                     </span>
                   </div>
                 </div>
@@ -2233,11 +3063,12 @@ export default function App() {
 
                   <div>
                     <strong>
-                      Garmin Connect
+                      Garmin
                     </strong>
 
                     <span>
-                      Planerad integration
+                      Planerad
+                      integration
                     </span>
                   </div>
                 </div>
@@ -2249,13 +3080,21 @@ export default function App() {
 
       <div className="mobile-nav">
         {navigation.map(
-          ([id, label, Icon]) => (
+          ([
+            id,
+            label,
+            Icon,
+          ]) => (
             <button
               key={id}
               className={
-                page === id ? "active" : ""
+                page === id
+                  ? "active"
+                  : ""
               }
-              onClick={() => setPage(id)}
+              onClick={() =>
+                setPage(id)
+              }
             >
               <Icon size={20} />
               <span>{label}</span>
@@ -2264,151 +3103,21 @@ export default function App() {
         )}
       </div>
 
-      {shareDialog && completedActivity && (
-        <div className="modal-backdrop">
-          <div className="modal">
-            <button
-              className="modal-close"
-              onClick={() => {
-                setShareDialog(false);
-                setCompletedActivity(null);
-              }}
-            >
-              <X />
-            </button>
-
-            <Share2
-              size={32}
-              className="modal-icon"
-            />
-
-            <h2>Dela aktiviteten?</h2>
-
-            <p>
-              Aktiviteten är privat tills du
-              väljer att publicera den.
-            </p>
-
-            <textarea
-              placeholder="Skriv något om aktiviteten..."
-              value={shareMessage}
-              onChange={(event) =>
-                setShareMessage(
-                  event.target.value
-                )
-              }
-            />
-
-            <label className="field">
-              Synlighet
-
-              <select
-                value={shareVisibility}
-                onChange={(event) =>
-                  setShareVisibility(
-                    event.target.value
-                  )
-                }
-              >
-                <option value="private">
-                  Privat
-                </option>
-
-                <option value="members">
-                  Pulsly-medlemmar
-                </option>
-
-                <option value="public">
-                  Offentligt
-                </option>
-              </select>
-            </label>
-
-            <button
-              className={`choice ${
-                shareRoute ? "selected" : ""
-              }`}
-              onClick={() =>
-                setShareRoute(
-                  (value) => !value
-                )
-              }
-            >
-              <MapPin />
-
-              <span>
-                <strong>
-                  Dela faktisk GPS-rutt
-                </strong>
-
-                <small>
-                  Start och slut döljs med
-                  integritetsmarginal.
-                </small>
-              </span>
-
-              {shareRoute && <Check />}
-            </button>
-
-            <button
-              className={`choice ${
-                shareSplits ? "selected" : ""
-              }`}
-              onClick={() =>
-                setShareSplits(
-                  (value) => !value
-                )
-              }
-            >
-              <BarChart3 />
-
-              <span>
-                <strong>
-                  Dela kilometertider
-                </strong>
-
-                <small>
-                  Visa splits i inlägget.
-                </small>
-              </span>
-
-              {shareSplits && <Check />}
-            </button>
-
-            <div className="modal-actions">
-              <button
-                className="secondary"
-                onClick={() => {
-                  setShareDialog(false);
-                  setCompletedActivity(null);
-                }}
-              >
-                Behåll privat
-              </button>
-
-              <button
-                className="primary"
-                onClick={publishActivity}
-              >
-                <Send size={18} />
-                Publicera
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {eventDialog && (
         <div className="modal-backdrop">
           <form
             className="modal"
-            onSubmit={createEvent}
+            onSubmit={
+              createEvent
+            }
           >
             <button
               type="button"
               className="modal-close"
               onClick={() =>
-                setEventDialog(false)
+                setEventDialog(
+                  false
+                )
               }
             >
               <X />
@@ -2419,42 +3128,37 @@ export default function App() {
               className="modal-icon"
             />
 
-            <h2>Skapa event</h2>
+            <h2>
+              Skapa event
+            </h2>
 
             <p>
-              Anmälan stängs automatiskt när
-              eventets starttid passerats.
+              Anmälan är öppen
+              fram till
+              starttiden.
             </p>
 
             <label className="field">
               Namn
 
               <input
-                value={eventForm.title}
-                onChange={(event) =>
-                  setEventForm({
-                    ...eventForm,
-                    title: event.target.value,
-                  })
-                }
-                placeholder="Exempel: Fredagsrundan"
                 required
-              />
-            </label>
-
-            <label className="field">
-              Beskrivning
-
-              <textarea
-                value={eventForm.description}
-                onChange={(event) =>
-                  setEventForm({
-                    ...eventForm,
-                    description:
-                      event.target.value,
-                  })
+                value={
+                  eventForm.title
                 }
-                placeholder="Valfri information om eventet"
+                onChange={(
+                  event
+                ) =>
+                  setEventForm(
+                    {
+                      ...eventForm,
+                      title:
+                        event
+                          .target
+                          .value,
+                    }
+                  )
+                }
               />
             </label>
 
@@ -2462,23 +3166,39 @@ export default function App() {
               Aktivitet
 
               <select
-                value={eventForm.activityType}
-                onChange={(event) =>
-                  setEventForm({
-                    ...eventForm,
-                    activityType:
-                      event.target.value,
-                  })
+                value={
+                  eventForm.activityType
+                }
+                onChange={(
+                  event
+                ) =>
+                  setEventForm(
+                    {
+                      ...eventForm,
+                      activityType:
+                        event
+                          .target
+                          .value,
+                    }
+                  )
                 }
               >
-                {activityTypes.map((type) => (
-                  <option
-                    key={type.id}
-                    value={type.name}
-                  >
-                    {type.name}
-                  </option>
-                ))}
+                {activityTypes.map(
+                  (type) => (
+                    <option
+                      key={
+                        type.id
+                      }
+                      value={
+                        type.name
+                      }
+                    >
+                      {
+                        type.name
+                      }
+                    </option>
+                  )
+                )}
               </select>
             </label>
 
@@ -2487,15 +3207,23 @@ export default function App() {
 
               <input
                 type="datetime-local"
-                value={eventForm.startsAt}
-                onChange={(event) =>
-                  setEventForm({
-                    ...eventForm,
-                    startsAt:
-                      event.target.value,
-                  })
-                }
                 required
+                value={
+                  eventForm.startsAt
+                }
+                onChange={(
+                  event
+                ) =>
+                  setEventForm(
+                    {
+                      ...eventForm,
+                      startsAt:
+                        event
+                          .target
+                          .value,
+                    }
+                  )
+                }
               />
             </label>
 
@@ -2503,15 +3231,45 @@ export default function App() {
               Mötesplats
 
               <input
-                value={eventForm.locationName}
-                onChange={(event) =>
-                  setEventForm({
-                    ...eventForm,
-                    locationName:
-                      event.target.value,
-                  })
+                value={
+                  eventForm.locationName
                 }
-                placeholder="Exempel: Lund C"
+                onChange={(
+                  event
+                ) =>
+                  setEventForm(
+                    {
+                      ...eventForm,
+                      locationName:
+                        event
+                          .target
+                          .value,
+                    }
+                  )
+                }
+              />
+            </label>
+
+            <label className="field">
+              Beskrivning
+
+              <textarea
+                value={
+                  eventForm.description
+                }
+                onChange={(
+                  event
+                ) =>
+                  setEventForm(
+                    {
+                      ...eventForm,
+                      description:
+                        event
+                          .target
+                          .value,
+                    }
+                  )
+                }
               />
             </label>
 
@@ -2519,11 +3277,182 @@ export default function App() {
               className="primary full"
               type="submit"
             >
-              Skapa event och anmäl mig
+              Skapa event och
+              anmäl mig
             </button>
           </form>
         </div>
       )}
+
+      {shareDialog &&
+        completedActivity && (
+          <div className="modal-backdrop">
+            <div className="modal">
+              <button
+                className="modal-close"
+                onClick={() => {
+                  setShareDialog(
+                    false
+                  );
+
+                  setCompletedActivity(
+                    null
+                  );
+                }}
+              >
+                <X />
+              </button>
+
+              <Share2
+                size={32}
+                className="modal-icon"
+              />
+
+              <h2>
+                Dela aktiviteten?
+              </h2>
+
+              <p>
+                Aktiviteten är privat
+                tills du väljer att
+                publicera den.
+              </p>
+
+              <textarea
+                value={
+                  shareMessage
+                }
+                placeholder="Skriv något..."
+                onChange={(
+                  event
+                ) =>
+                  setShareMessage(
+                    event.target
+                      .value
+                  )
+                }
+              />
+
+              <label className="field">
+                Synlighet
+
+                <select
+                  value={
+                    shareVisibility
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setShareVisibility(
+                      event.target
+                        .value
+                    )
+                  }
+                >
+                  <option value="private">
+                    Privat
+                  </option>
+
+                  <option value="members">
+                    Pulsly-medlemmar
+                  </option>
+
+                  <option value="public">
+                    Offentligt
+                  </option>
+                </select>
+              </label>
+
+              <button
+                className={`choice ${
+                  shareRoute
+                    ? "selected"
+                    : ""
+                }`}
+                onClick={() =>
+                  setShareRoute(
+                    (value) =>
+                      !value
+                  )
+                }
+              >
+                <MapPin />
+
+                <span>
+                  <strong>
+                    Dela
+                    GPS-rutt
+                  </strong>
+
+                  <small>
+                    Start och slut
+                    döljs.
+                  </small>
+                </span>
+
+                {shareRoute && (
+                  <Check />
+                )}
+              </button>
+
+              <button
+                className={`choice ${
+                  shareSplits
+                    ? "selected"
+                    : ""
+                }`}
+                onClick={() =>
+                  setShareSplits(
+                    (value) =>
+                      !value
+                  )
+                }
+              >
+                <BarChart3 />
+
+                <span>
+                  <strong>
+                    Dela
+                    kilometertider
+                  </strong>
+                </span>
+
+                {shareSplits && (
+                  <Check />
+                )}
+              </button>
+
+              <div className="modal-actions">
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setShareDialog(
+                      false
+                    );
+
+                    setCompletedActivity(
+                      null
+                    );
+                  }}
+                >
+                  Behåll privat
+                </button>
+
+                <button
+                  className="primary"
+                  onClick={
+                    publishActivity
+                  }
+                >
+                  <Send
+                    size={18}
+                  />
+                  Publicera
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       <style>{`
         :root {
@@ -2555,8 +3484,17 @@ export default function App() {
           align-items: center;
           justify-content: space-between;
           border-bottom: 1px solid #e2e8f0;
-          background: rgba(255, 255, 255, 0.94);
+          background: rgba(255,255,255,.95);
           backdrop-filter: blur(18px);
+        }
+
+        button {
+          cursor: pointer;
+        }
+
+        button:disabled {
+          cursor: default;
+          opacity: .6;
         }
 
         .logo {
@@ -2565,7 +3503,6 @@ export default function App() {
           display: flex;
           align-items: center;
           gap: 10px;
-          color: #0f172a;
           font-size: 22px;
           font-weight: 950;
         }
@@ -2575,9 +3512,9 @@ export default function App() {
           height: 39px;
           display: grid;
           place-items: center;
-          border-radius: 13px;
           color: white;
-          background: linear-gradient(135deg, #10b981, #14b8a6);
+          border-radius: 13px;
+          background: linear-gradient(135deg,#10b981,#14b8a6);
         }
 
         nav {
@@ -2592,18 +3529,18 @@ export default function App() {
           border: 0;
           padding: 9px 12px;
           display: flex;
-          align-items: center;
           gap: 7px;
+          align-items: center;
           border-radius: 10px;
-          color: #64748b;
           background: transparent;
+          color: #64748b;
           font-weight: 800;
         }
 
         nav button.active {
           color: #059669;
           background: white;
-          box-shadow: 0 2px 5px rgba(15, 23, 42, 0.08);
+          box-shadow: 0 2px 5px rgba(15,23,42,.08);
         }
 
         .avatar-button {
@@ -2618,7 +3555,7 @@ export default function App() {
         }
 
         main {
-          width: min(1180px, calc(100% - 28px));
+          width: min(1180px,calc(100% - 28px));
           margin: auto;
           padding: 32px 0;
         }
@@ -2633,8 +3570,7 @@ export default function App() {
 
         .page-title h1 {
           margin: 4px 0;
-          font-size: clamp(31px, 5vw, 44px);
-          line-height: 1.05;
+          font-size: clamp(31px,5vw,44px);
         }
 
         .page-title p,
@@ -2646,31 +3582,19 @@ export default function App() {
           color: #059669;
           font-size: 12px;
           font-weight: 900;
-          letter-spacing: 0.1em;
+          letter-spacing: .1em;
         }
 
         .card {
           padding: 24px;
           border-radius: 26px;
           background: white;
-          box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05);
-        }
-
-        .card h2 {
-          margin-top: 0;
-        }
-
-        .verified {
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          color: #059669;
-          font-weight: 900;
+          box-shadow: 0 4px 18px rgba(15,23,42,.05);
         }
 
         .home-metrics {
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          grid-template-columns: repeat(4,1fr);
           gap: 12px;
           margin-top: 20px;
         }
@@ -2698,9 +3622,17 @@ export default function App() {
           font-size: 11px;
         }
 
+        .verified {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          color: #059669;
+          font-weight: 900;
+        }
+
         .dashboard-grid {
           display: grid;
-          grid-template-columns: 1.2fr 0.8fr;
+          grid-template-columns: 1.2fr .8fr;
           gap: 20px;
           margin-top: 20px;
         }
@@ -2718,48 +3650,269 @@ export default function App() {
           align-items: start;
         }
 
-        .section-header {
+        .event-grid {
+          display: grid;
+          grid-template-columns: repeat(2,1fr);
+          gap: 18px;
+        }
+
+        .event-card-top {
           display: flex;
-          align-items: flex-start;
+          align-items: center;
           justify-content: space-between;
-          gap: 15px;
         }
 
-        .section-header h2,
-        .section-header p {
-          margin-top: 0;
-        }
-
-        .icon-button,
-        .voice-toggle {
-          width: 44px;
-          height: 44px;
-          border: 0;
-          border-radius: 14px;
+        .event-icon {
+          width: 48px;
+          height: 48px;
           display: grid;
           place-items: center;
-        }
-
-        .icon-button {
+          border-radius: 15px;
           color: #059669;
           background: #ecfdf5;
         }
 
-        .voice-toggle {
+        .event-details {
+          display: grid;
+          gap: 9px;
+          margin-top: 16px;
+        }
+
+        .event-details span {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #64748b;
+          font-size: 13px;
+        }
+
+        .pill {
+          padding: 5px 9px;
+          border-radius: 999px;
+          color: #047857;
+          background: #ecfdf5;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .joined,
+        .closed {
+          margin-top: 15px;
+          padding: 11px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 7px;
+          border-radius: 12px;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .joined {
+          color: #047857;
+          background: #ecfdf5;
+        }
+
+        .closed {
           color: #64748b;
           background: #f1f5f9;
         }
 
-        .voice-toggle.enabled {
+        .verification-panel {
+          margin-top: 17px;
+          padding: 15px;
+          border-radius: 16px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+        }
+
+        .verified-panel {
+          border-color: #a7f3d0;
+          background: #ecfdf5;
+        }
+
+        .verification-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 14px;
+          color: #475569;
+        }
+
+        .verified-panel .verification-title {
+          color: #047857;
+        }
+
+        .verification-grid {
+          display: grid;
+          grid-template-columns: repeat(4,1fr);
+          gap: 6px;
+        }
+
+        .verification-grid > div {
+          padding: 9px 5px;
+          display: flex;
+          flex-direction: column;
+          text-align: center;
+          border-radius: 10px;
+          background: white;
+        }
+
+        .verification-grid strong {
+          font-size: 18px;
+        }
+
+        .verification-grid span {
+          color: #94a3b8;
+          font-size: 9px;
+        }
+
+        .my-verification {
+          margin-top: 14px;
+          padding-top: 13px;
+          border-top: 1px solid #e2e8f0;
+          display: grid;
+          gap: 8px;
+        }
+
+        .bonus-success {
+          display: flex;
+          gap: 6px;
+          align-items: center;
+          color: #047857;
+          font-weight: 900;
+        }
+
+        .points-breakdown {
+          display: grid;
+          grid-template-columns: repeat(3,1fr);
+          gap: 5px;
+        }
+
+        .points-breakdown span {
+          padding: 7px;
+          display: flex;
+          flex-direction: column;
+          border-radius: 9px;
+          background: white;
+          font-size: 10px;
+        }
+
+        .waiting {
+          color: #92400e;
+        }
+
+        .not-verified {
+          color: #be123c;
+        }
+
+        .recheck-button {
+          width: 100%;
+          margin-top: 13px;
+          padding: 10px;
+          border: 0;
+          border-radius: 10px;
+          background: #0f172a;
           color: white;
-          background: #10b981;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 7px;
+          font-weight: 800;
+        }
+
+        .activity-selector {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
+        .activity-selector button {
+          min-height: 76px;
+          border: 1px solid #e2e8f0;
+          border-radius: 15px;
+          background: white;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          gap: 7px;
+          font-weight: 900;
+        }
+
+        .activity-selector button.selected {
+          border-color: #10b981;
+          color: #047857;
+          background: #ecfdf5;
+        }
+
+        .field {
+          display: flex;
+          flex-direction: column;
+          gap: 7px;
+          margin-top: 16px;
+          color: #334155;
+          font-size: 13px;
+          font-weight: 900;
+        }
+
+        .field input,
+        .field select,
+        textarea {
+          width: 100%;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
+          padding: 12px;
+          outline: 0;
+          background: white;
+        }
+
+        textarea {
+          min-height: 95px;
+          resize: vertical;
+        }
+
+        .timer {
+          margin: 28px 0 17px;
+          text-align: center;
+          font-size: 45px;
+          font-weight: 950;
+        }
+
+        .timer span {
+          display: block;
+          color: #94a3b8;
+          font-size: 12px;
+        }
+
+        .tracker-metrics,
+        .post-metrics {
+          display: grid;
+          grid-template-columns: repeat(3,1fr);
+          gap: 8px;
+        }
+
+        .tracking-actions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .pending-bonus {
+          margin-top: 15px;
+          padding: 13px;
+          display: flex;
+          gap: 9px;
+          border-radius: 13px;
+          color: #6d28d9;
+          background: #f5f3ff;
+          font-size: 12px;
         }
 
         .primary,
         .secondary,
         .danger,
-        .accept,
-        .decline,
         .logout {
           border: 0;
           padding: 12px 17px;
@@ -2776,10 +3929,6 @@ export default function App() {
           background: #0f172a;
         }
 
-        .primary:disabled {
-          opacity: 0.55;
-        }
-
         .secondary {
           color: #0f172a;
           background: #f1f5f9;
@@ -2790,19 +3939,120 @@ export default function App() {
           background: #e11d48;
         }
 
-        .accept {
-          color: white;
-          background: #059669;
+        .full {
+          width: 100%;
+          margin-top: 16px;
         }
 
-        .decline {
+        .profile-card {
+          text-align: center;
+        }
+
+        .large-avatar,
+        .post-avatar {
+          display: grid;
+          place-items: center;
+          border-radius: 50%;
+          color: white;
+          background: #0f172a;
+          font-weight: 950;
+        }
+
+        .large-avatar {
+          width: 96px;
+          height: 96px;
+          margin: auto;
+          font-size: 25px;
+        }
+
+        .post-avatar {
+          width: 45px;
+          height: 45px;
+          font-size: 11px;
+        }
+
+        .logout {
+          width: 100%;
+          margin-top: 20px;
           color: #be123c;
           background: #fff1f2;
         }
 
-        .full {
+        .setting-list button {
           width: 100%;
-          margin-top: 16px;
+          padding: 14px 0;
+          border: 0;
+          border-bottom: 1px solid #f1f5f9;
+          background: transparent;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-weight: 800;
+        }
+
+        .switch {
+          width: 43px;
+          height: 24px;
+          padding: 3px;
+          border-radius: 999px;
+          display: flex;
+          background: #cbd5e1;
+        }
+
+        .switch i {
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: white;
+          transition: transform .2s;
+        }
+
+        .switch.on {
+          background: #10b981;
+        }
+
+        .switch.on i {
+          transform: translateX(19px);
+        }
+
+        .section-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: start;
+          gap: 15px;
+        }
+
+        .voice-toggle {
+          width: 44px;
+          height: 44px;
+          border: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 14px;
+          background: #f1f5f9;
+        }
+
+        .voice-toggle.enabled {
+          color: white;
+          background: #10b981;
+        }
+
+        .health-service {
+          padding: 15px 0;
+          display: flex;
+          gap: 13px;
+          align-items: center;
+          border-bottom: 1px solid #f1f5f9;
+        }
+
+        .health-service > div {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .health-service span {
+          color: #94a3b8;
+          font-size: 12px;
         }
 
         .map {
@@ -2816,10 +4066,10 @@ export default function App() {
         .map-grid {
           position: absolute;
           inset: -50px;
-          opacity: 0.5;
+          opacity: .5;
           background-image:
-            linear-gradient(#bdcbc2 1px, transparent 1px),
-            linear-gradient(90deg, #bdcbc2 1px, transparent 1px);
+            linear-gradient(#bdcbc2 1px,transparent 1px),
+            linear-gradient(90deg,#bdcbc2 1px,transparent 1px);
           background-size: 42px 42px;
           transform: rotate(-7deg);
         }
@@ -2828,7 +4078,7 @@ export default function App() {
           height: 13px;
           position: absolute;
           border-radius: 20px;
-          background: rgba(255, 255, 255, 0.9);
+          background: rgba(255,255,255,.9);
         }
 
         .road-one {
@@ -2865,121 +4115,20 @@ export default function App() {
           padding: 8px 11px;
           border-radius: 10px;
           background: white;
-          box-shadow: 0 3px 12px rgba(15, 23, 42, 0.1);
           font-size: 12px;
           font-weight: 900;
         }
 
         .map-badge {
-          left: 14px;
           top: 14px;
+          left: 14px;
           display: flex;
-          align-items: center;
           gap: 6px;
         }
 
         .map-count {
           right: 14px;
           bottom: 14px;
-        }
-
-        .activity-selector {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 8px;
-        }
-
-        .activity-selector button {
-          min-height: 78px;
-          border: 1px solid #e2e8f0;
-          border-radius: 15px;
-          background: white;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-          gap: 7px;
-          font-weight: 900;
-        }
-
-        .activity-selector button.selected {
-          color: #047857;
-          background: #ecfdf5;
-          border-color: #10b981;
-        }
-
-        .field {
-          display: flex;
-          flex-direction: column;
-          gap: 7px;
-          margin-top: 16px;
-          color: #334155;
-          font-size: 13px;
-          font-weight: 900;
-        }
-
-        .field input,
-        .field select,
-        textarea {
-          width: 100%;
-          border: 1px solid #e2e8f0;
-          border-radius: 12px;
-          padding: 12px;
-          outline: 0;
-          color: #0f172a;
-          background: white;
-        }
-
-        textarea {
-          min-height: 95px;
-          resize: vertical;
-        }
-
-        .timer {
-          margin: 28px 0 17px;
-          text-align: center;
-          font-size: 45px;
-          font-weight: 950;
-          font-variant-numeric: tabular-nums;
-        }
-
-        .timer span {
-          display: block;
-          margin-top: 3px;
-          color: #94a3b8;
-          font-size: 12px;
-        }
-
-        .tracker-metrics,
-        .post-metrics {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 8px;
-        }
-
-        .post-metrics {
-          grid-template-columns: repeat(4, 1fr);
-          margin: 18px 0;
-        }
-
-        .tracking-actions {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-          margin-top: 16px;
-        }
-
-        .pending-bonus {
-          margin-top: 15px;
-          padding: 13px;
-          display: flex;
-          align-items: flex-start;
-          gap: 9px;
-          border-radius: 13px;
-          color: #6d28d9;
-          background: #f5f3ff;
-          font-size: 12px;
-          line-height: 1.5;
         }
 
         .splits {
@@ -2994,131 +4143,8 @@ export default function App() {
           border-bottom: 1px solid #f1f5f9;
         }
 
-        .event-grid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 18px;
-        }
-
-        .event-card-top {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .event-icon {
-          width: 48px;
-          height: 48px;
-          display: grid;
-          place-items: center;
-          border-radius: 15px;
-          color: #059669;
-          background: #ecfdf5;
-        }
-
-        .pill {
-          padding: 5px 9px;
-          border-radius: 999px;
-          color: #047857;
-          background: #ecfdf5;
-          font-size: 10px;
-          font-weight: 900;
-        }
-
-        .pill.started {
-          color: #475569;
-          background: #f1f5f9;
-        }
-
-        .event-details {
-          display: grid;
-          gap: 9px;
-          margin-top: 18px;
-        }
-
-        .event-details span {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          color: #64748b;
-          font-size: 13px;
-        }
-
-        .joined,
-        .closed {
-          margin-top: 17px;
-          padding: 11px;
-          border-radius: 12px;
-          text-align: center;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .joined {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 7px;
-          color: #047857;
-          background: #ecfdf5;
-        }
-
-        .closed {
-          color: #64748b;
-          background: #f1f5f9;
-        }
-
-        .invite-card {
-          margin-bottom: 20px;
-        }
-
-        .invite-row {
-          padding: 13px 0;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 15px;
-          border-bottom: 1px solid #f1f5f9;
-        }
-
-        .invite-row > div:first-child {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .invite-row span {
-          color: #64748b;
-          font-size: 12px;
-        }
-
-        .invite-actions {
-          display: flex;
-          gap: 8px;
-        }
-
-        .mini-row {
-          padding: 13px 0;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          border-bottom: 1px solid #f1f5f9;
-        }
-
-        .mini-row > div {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .mini-row span {
-          color: #64748b;
-          font-size: 12px;
-        }
-
         .wall {
-          width: min(760px, 100%);
+          width: min(760px,100%);
           margin: auto;
           display: grid;
           gap: 20px;
@@ -3136,143 +4162,50 @@ export default function App() {
           flex-direction: column;
         }
 
-        .post-header span {
-          color: #94a3b8;
-          font-size: 12px;
-        }
-
-        .post-avatar,
-        .large-avatar {
-          display: grid;
-          place-items: center;
-          border-radius: 50%;
-          color: white;
-          background: #0f172a;
-          font-weight: 950;
-        }
-
-        .post-avatar {
-          width: 45px;
-          height: 45px;
-          font-size: 11px;
-        }
-
-        .large-avatar {
-          width: 96px;
-          height: 96px;
-          margin: auto;
-          font-size: 25px;
-        }
-
         .verified-icon {
           color: #10b981;
         }
 
-        .post-message {
-          margin-top: 17px;
+        .post-metrics {
+          margin: 18px 0;
         }
 
         .post-actions {
           display: flex;
-          gap: 8px;
-          padding-top: 15px;
+          gap: 10px;
           border-top: 1px solid #f1f5f9;
+          padding-top: 14px;
         }
 
         .post-actions button {
           border: 0;
           background: transparent;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          color: #64748b;
-          font-weight: 800;
         }
 
-        .post-actions button.liked {
+        .post-actions .liked {
           color: #e11d48;
         }
 
-        .profile-card {
-          text-align: center;
-        }
-
-        .logout {
-          width: 100%;
-          margin-top: 19px;
-          color: #be123c;
-          background: #fff1f2;
-        }
-
-        .setting-list button {
-          width: 100%;
-          padding: 14px 0;
-          border: 0;
-          border-bottom: 1px solid #f1f5f9;
-          background: transparent;
+        .mini-row {
+          padding: 13px 0;
           display: flex;
-          align-items: center;
           justify-content: space-between;
-          font-weight: 800;
-        }
-
-        .switch {
-          width: 43px;
-          height: 24px;
-          padding: 3px;
-          display: flex;
-          border-radius: 999px;
-          background: #cbd5e1;
-        }
-
-        .switch i {
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: white;
-          transition: transform 0.2s;
-        }
-
-        .switch.on {
-          background: #10b981;
-        }
-
-        .switch.on i {
-          transform: translateX(19px);
-        }
-
-        .health-service {
-          padding: 15px 0;
-          display: flex;
-          align-items: center;
-          gap: 13px;
           border-bottom: 1px solid #f1f5f9;
         }
 
-        .health-service > div {
+        .mini-row > div {
           display: flex;
           flex-direction: column;
-          gap: 3px;
-        }
-
-        .health-service span {
-          color: #94a3b8;
-          font-size: 12px;
         }
 
         .empty {
-          min-height: 155px;
+          min-height: 140px;
           display: flex;
           flex-direction: column;
           justify-content: center;
           align-items: center;
-          gap: 9px;
-          text-align: center;
+          gap: 8px;
           color: #94a3b8;
-        }
-
-        .empty strong {
-          color: #334155;
         }
 
         .modal-backdrop {
@@ -3282,20 +4215,18 @@ export default function App() {
           padding: 18px;
           display: grid;
           place-items: center;
-          overflow-y: auto;
-          background: rgba(15, 23, 42, 0.58);
+          background: rgba(15,23,42,.58);
           backdrop-filter: blur(5px);
         }
 
         .modal {
-          width: min(540px, 100%);
+          width: min(540px,100%);
           max-height: calc(100vh - 36px);
           overflow-y: auto;
           position: relative;
           padding: 28px;
           border-radius: 27px;
           background: white;
-          box-shadow: 0 30px 80px rgba(15, 23, 42, 0.28);
         }
 
         .modal-close {
@@ -3305,8 +4236,6 @@ export default function App() {
           right: 17px;
           top: 17px;
           border: 0;
-          display: grid;
-          place-items: center;
           border-radius: 12px;
           background: #f1f5f9;
         }
@@ -3319,18 +4248,18 @@ export default function App() {
           width: 100%;
           margin-top: 12px;
           padding: 14px;
+          border: 1px solid #e2e8f0;
+          border-radius: 14px;
           display: flex;
           align-items: center;
           gap: 12px;
-          border: 1px solid #e2e8f0;
-          border-radius: 14px;
           text-align: left;
           background: white;
         }
 
         .choice.selected {
-          color: #047857;
           border-color: #10b981;
+          color: #047857;
           background: #ecfdf5;
         }
 
@@ -3338,11 +4267,6 @@ export default function App() {
           flex: 1;
           display: flex;
           flex-direction: column;
-          gap: 3px;
-        }
-
-        .choice small {
-          color: #64748b;
         }
 
         .modal-actions {
@@ -3353,19 +4277,15 @@ export default function App() {
         }
 
         .toast {
-          max-width: calc(100vw - 30px);
           position: fixed;
           z-index: 200;
           top: 16px;
           left: 50%;
           transform: translateX(-50%);
+          max-width: calc(100vw - 30px);
           padding: 12px 17px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
           border-radius: 13px;
           color: white;
-          box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
         }
 
         .toast-success {
@@ -3376,23 +4296,30 @@ export default function App() {
           background: #be123c;
         }
 
+        .spin {
+          animation: spin .8s linear infinite;
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
         .mobile-nav {
           display: none;
         }
 
-        @media (max-width: 900px) {
+        @media (max-width:900px) {
           header nav {
             display: none;
           }
 
           .dashboard-grid,
           .tracker-grid,
-          .profile-grid {
-            grid-template-columns: 1fr;
-          }
-
+          .profile-grid,
           .event-grid {
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr;
           }
 
           .mobile-nav {
@@ -3403,11 +4330,9 @@ export default function App() {
             bottom: 0;
             display: flex;
             justify-content: space-around;
-            padding: 8px 2px
-              calc(8px + env(safe-area-inset-bottom));
+            padding: 8px 2px calc(8px + env(safe-area-inset-bottom));
             border-top: 1px solid #e2e8f0;
-            background: rgba(255, 255, 255, 0.96);
-            backdrop-filter: blur(16px);
+            background: rgba(255,255,255,.96);
           }
 
           .mobile-nav button {
@@ -3427,37 +4352,27 @@ export default function App() {
           }
         }
 
-        @media (max-width: 640px) {
+        @media (max-width:640px) {
           header {
             padding: 0 14px;
           }
 
           main {
-            width: min(100% - 24px, 1180px);
+            width: calc(100% - 24px);
             padding: 22px 0;
           }
 
           .page-title {
-            align-items: flex-start;
             flex-direction: column;
+            align-items: stretch;
           }
 
-          .page-title > button {
-            width: 100%;
+          .home-metrics {
+            grid-template-columns: 1fr 1fr;
           }
 
           .card {
             padding: 18px;
-            border-radius: 21px;
-          }
-
-          .home-metrics,
-          .post-metrics {
-            grid-template-columns: 1fr 1fr;
-          }
-
-          .event-grid {
-            grid-template-columns: 1fr;
           }
 
           .activity-selector {
@@ -3465,40 +4380,23 @@ export default function App() {
           }
 
           .tracker-metrics {
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(3,1fr);
           }
 
-          .metric {
-            padding: 10px;
+          .verification-grid {
+            grid-template-columns: 1fr 1fr;
           }
 
-          .metric strong {
-            font-size: 14px;
+          .points-breakdown {
+            grid-template-columns: 1fr;
           }
 
           .map {
             height: 260px;
           }
 
-          .timer {
-            font-size: 38px;
-          }
-
           .modal-actions {
             grid-template-columns: 1fr;
-          }
-
-          .invite-row {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-
-          .invite-actions {
-            width: 100%;
-          }
-
-          .invite-actions .accept {
-            flex: 1;
           }
         }
       `}</style>
