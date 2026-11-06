@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, BarChart3, Bell, Bike, CalendarDays, Check, CheckCircle2, Clock, Footprints,
+  Activity, BarChart3, Bell, Bike, CalendarDays, Check, CheckCircle2, Clock, Footprints, Search,
   Heart, Home, LogOut, MapPin, MessageCircle, Mic, MicOff, Pause, Play,
   Plus, RefreshCw, Route, Send, Share2, ShieldCheck, Smartphone, Square,
   Settings, Timer, Trophy, User, Users, Watch, X, Zap,
@@ -13,6 +13,9 @@ import { getLeaderboard, getMyPointsSummary, recalculateTodayPoints } from "./li
 import { getMyNotifications, getUnreadNotificationCount, markNotificationRead, markAllNotificationsRead, subscribeToMyNotifications } from "./lib/notificationRepository";
 import { getTeams, joinTeam, leaveTeam, getTeamMembers } from "./lib/profileRepository";
 import { getPrivacySettings, savePrivacySettings, deleteMyHealthData } from "./lib/privacyRepository";
+import { globalSearch } from "./lib/searchRepository";
+import { downloadMyActivitiesCsv, downloadMyHealthCsv, exportMyVo2Csv, downloadTextFile } from "./lib/exportRepository";
+import { getMyAdminRole, getAdminOverview, getAdminUsers, getHealthSyncFailures } from "./lib/adminRepository";
 
 const TYPES = [
   { id: "walk", name: "Promenad", icon: Footprints, ppm: 10, pace: true },
@@ -69,6 +72,14 @@ export default function App() {
   const [notifications, setNotifications] = useState([]), [unreadCount, setUnreadCount] = useState(0);
   const [teams, setTeams] = useState([]), [teamMemberships, setTeamMemberships] = useState([]), [teamMembers, setTeamMembers] = useState({});
   const [privacy, setPrivacy] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState({ people: [], events: [], challenges: [], teams: [] });
+  const [searching, setSearching] = useState(false);
+  const [adminAccess, setAdminAccess] = useState({ role: "user", isAdmin: false, isSuperuser: false });
+  const [adminOverview, setAdminOverview] = useState(null);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [healthSyncFailures, setHealthSyncFailures] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
   const [tracking, setTracking] = useState(false), [paused, setPaused] = useState(false), [type, setType] = useState(TYPES[0]);
   const [seconds, setSeconds] = useState(0), [distance, setDistance] = useState(0), [positions, setPositions] = useState([]), [splits, setSplits] = useState([]), [eventId, setEventId] = useState("");
   const [eventModal, setEventModal] = useState(false), [eventForm, setEventForm] = useState(EMPTY_EVENT);
@@ -100,6 +111,7 @@ export default function App() {
     if (page === "notifications") loadNotifications();
     if (page === "teams") loadTeamsPage();
     if (page === "privacy") loadPrivacyPage();
+    if (page === "admin") loadAdminPage();
   }, [page]);
   useEffect(() => { if (!tracking || paused) return; const id = setInterval(() => setSeconds((v) => v + 1), 1000); return () => clearInterval(id); }, [tracking, paused]);
   useEffect(() => { if (page === "events" && session?.user) loadEvents(session.user.id); if (page === "health" && session?.user) { loadHealth(session.user.id); checkNativeHealth(); } }, [page]);
@@ -116,7 +128,11 @@ export default function App() {
   const ok = (m) => { setToast(m); setTimeout(() => setToast(""), 3500); };
   const fail = (m) => { setError(m); setTimeout(() => setError(""), 5500); };
   async function loadAll(uid) { await Promise.all([loadProfile(uid), loadActivities(uid), loadSettings(uid), loadEvents(uid), loadPosts(), loadHealth(uid)]); }
-  async function loadProfile(uid) { const { data } = await supabase.from("profiles").select("*").eq("id", uid).maybeSingle(); if (data) setProfile(data); }
+  async function loadProfile(uid) {
+    const { data } = await supabase.from("profiles").select("*").eq("id", uid).maybeSingle();
+    if (data) setProfile(data);
+    try { setAdminAccess(await getMyAdminRole()); } catch { setAdminAccess({ role: "user", isAdmin: false, isSuperuser: false }); }
+  }
   async function loadActivities(uid) { const { data, error } = await supabase.from("activities").select("*").eq("user_id", uid).order("started_at", { ascending: false }).limit(100); if (error) console.error(error); else setActivities(data || []); }
   async function loadSettings(uid) { const { data } = await supabase.from("user_settings").select("*").eq("user_id", uid).maybeSingle(); setSettings(data || { user_id: uid, voice_coach_enabled: true, voice_interval_meters: 1000, voice_total_time: true, voice_split_time: true, voice_average_pace: true, voice_speed: true, voice_language: "sv-SE" }); }
   async function loadEvents(uid) {
@@ -271,6 +287,39 @@ export default function App() {
   }
   async function publish() { if (!completed) return; try { const { data: post, error } = await supabase.from("activity_posts").insert({ activity_id: completed.id, user_id: session.user.id, message: shareText.trim() || null, visibility: shareVisibility, share_route: shareRoute, hide_route_start: true, hide_route_end: true, privacy_radius_meters: 200, share_splits: true, share_points: true, share_pace: true }).select().single(); if (error) throw error; if (shareRoute && completed.savedPositions?.length) await supabase.from("activity_post_routes").insert(completed.savedPositions.slice(2, -2).map((p, i) => ({ post_id: post.id, activity_id: completed.id, user_id: session.user.id, route_order: i, latitude: p.latitude, longitude: p.longitude }))); setShareModal(false); setCompleted(null); setShareText(""); setShareRoute(false); await loadPosts(); setPage("wall"); ok("Aktiviteten publicerades."); } catch (e) { fail(e.message); } }
   async function saveVoice(change) { const next = { ...settings, ...change, user_id: session.user.id, updated_at: new Date().toISOString() }; setSettings(next); const { error } = await supabase.from("user_settings").upsert(next, { onConflict: "user_id" }); if (error) fail(error.message); else ok("Röstinställningen sparades."); }
+  async function runGlobalSearch(event) {
+    event?.preventDefault?.();
+    const q = searchQuery.trim();
+    if (q.length < 2) { setSearchResults({ people: [], events: [], challenges: [], teams: [] }); return; }
+    setSearching(true);
+    try { setSearchResults(await globalSearch(q)); } catch (e) { fail(e.message); } finally { setSearching(false); }
+  }
+
+  async function loadAdminPage() {
+    if (!adminAccess?.isAdmin) return;
+    setAdminLoading(true);
+    try {
+      const [overview, users, failures] = await Promise.all([
+        getAdminOverview(),
+        getAdminUsers({ limit: 100 }),
+        getHealthSyncFailures({ limit: 25 }),
+      ]);
+      setAdminOverview(overview);
+      setAdminUsers(users);
+      setHealthSyncFailures(failures);
+    } catch (e) { fail(e.message); } finally { setAdminLoading(false); }
+  }
+
+  async function downloadActivities() { try { await downloadMyActivitiesCsv(); ok("Aktivitetsfilen skapades."); } catch (e) { fail(e.message); } }
+  async function downloadHealth() { try { await downloadMyHealthCsv(); ok("Halsofilen skapades."); } catch (e) { fail(e.message); } }
+  async function downloadVo2() {
+    try {
+      const content = await exportMyVo2Csv();
+      downloadTextFile({ content, fileName: "pulsly-vo2max.csv", mimeType: "text/csv;charset=utf-8" });
+      ok("VO2 max-filen skapades.");
+    } catch (e) { fail(e.message); }
+  }
+
   async function signOut() { stopGps(); speechSynthesis?.cancel(); await supabase.auth.signOut(); setSession(null); }
 
   const joinedIds = new Set(invites.filter((i) => i.status === "accepted").map((i) => i.event_id));
@@ -317,11 +366,14 @@ export default function App() {
       label: "Jag",
       icon: User,
       defaultPage: "profile",
-      pages: ["profile", "health", "privacy"],
+      pages: ["profile", "health", "privacy", "search", "data", "admin"],
       items: [
         ["profile", "Profil", User],
         ["health", "Hälsa", Heart],
         ["privacy", "Integritet", Settings],
+        ["search", "Sok", Search],
+        ["data", "Mina data", BarChart3],
+        ...(adminAccess?.isAdmin ? [["admin", "Admin", ShieldCheck]] : []),
       ],
     },
   ];
@@ -335,7 +387,7 @@ export default function App() {
   return <div className="app">
     {toast && <div className="toast ok"><CheckCircle2 size={18}/>{toast}</div>}
     {error && <div className="toast bad">{error}</div>}
-    <header><button className="brand" onClick={() => setPage("home")}><span><Activity size={23}/></span>Pulsly</button><nav>{menuGroups.map((group) => { const Icon = group.icon; return <button key={group.id} className={activeGroup.id === group.id ? "active" : ""} onClick={() => setPage(group.defaultPage)}><Icon size={17}/>{group.label}</button>; })}</nav><div className="headerActions"><button className="notificationBell" onClick={() => setPage("notifications")} aria-label="Notiser"><Bell size={20}/>{unreadCount > 0 && <span>{unreadCount > 99 ? "99+" : unreadCount}</span>}</button><button className="avatar" onClick={() => setPage("profile")}>{initials(fullName)}</button></div></header>
+    <header><button className="brand" onClick={() => setPage("home")}><span><Activity size={23}/></span>Pulsly</button><nav>{menuGroups.map((group) => { const Icon = group.icon; return <button key={group.id} className={activeGroup.id === group.id ? "active" : ""} onClick={() => setPage(group.defaultPage)}><Icon size={17}/>{group.label}</button>; })}</nav><div className="headerActions"><button className="notificationBell" onClick={() => setPage("search")} aria-label="Sok"><Search size={20}/></button><button className="notificationBell" onClick={() => setPage("notifications")} aria-label="Notiser"><Bell size={20}/>{unreadCount > 0 && <span>{unreadCount > 99 ? "99+" : unreadCount}</span>}</button><button className="avatar" onClick={() => setPage("profile")}>{initials(fullName)}</button></div></header>
     <div className="subnav">{activeGroup.items.map(([id,label,Icon]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={16}/>{label}</button>)}</div>
     <main>
       {page === "home" && <><Title eyebrow="PULSLY" title={`Hej ${fullName.includes("@") ? "där" : fullName.split(" ")[0]}! 👋`} text="All verifierad aktivitet räknas. Ingen daglig poänggräns." action={<button className="dark" onClick={() => setPage("track")}><Play size={18}/>Starta aktivitet</button>}/><Card><div className="verified"><ShieldCheck size={18}/>Din aktivitetsöversikt</div><div className="metrics four"><Metric icon={Footprints} label="Steg" value={totals.steps.toLocaleString("sv-SE")}/><Metric icon={Timer} label="Aktiv tid" value={`${totals.minutes} min`}/><Metric icon={Route} label="Distans" value={`${totals.distance.toFixed(1)} km`}/><Metric icon={Zap} label="Poäng" value={totals.points.toLocaleString("sv-SE")}/></div></Card><div className="grid two"><Card><h2>Aktivitetsvägg</h2>{posts.length ? posts.slice(0, 3).map((p) => <div className="row" key={p.id}><div><b>{p.profiles?.full_name || "Pulsly-medlem"}</b><span>{p.activities?.activity_type}</span></div><ChevronRight/></div>) : <Empty icon={Share2} text="Inga inlägg ännu"/>}</Card><Card><h2>Kommande event</h2>{events.filter((e) => new Date(e.starts_at) > new Date()).slice(0, 3).map((e) => <div className="row" key={e.id}><div><b>{e.title}</b><span>{fmtDate(e.starts_at)}</span></div><span className="pill">{e.activity_type}</span></div>)}</Card></div></>}
@@ -353,6 +405,47 @@ export default function App() {
       {page === "leaderboard" && <><Title eyebrow="TOPPLISTA" title="Mest aktiva" text="Verifierade aktivitets-, grupp- och passivpoäng senaste 30 dagarna." action={<button className="light" onClick={refreshPoints}><RefreshCw size={18}/>Räkna om</button>}/>{myPoints && <div className="metrics four"><Metric icon={Zap} label="Totalt" value={myPoints.totalPoints.toLocaleString("sv-SE")}/><Metric icon={Activity} label="Aktivitet" value={myPoints.activePoints.toLocaleString("sv-SE")}/><Metric icon={Footprints} label="Passivt" value={myPoints.passivePoints.toLocaleString("sv-SE")}/><Metric icon={Users} label="Gruppbonus" value={myPoints.groupBonusExtra.toLocaleString("sv-SE")}/></div>}<Card className="leaderCard">{leaderboard.map((item) => <div className="leaderRow" key={item.userId}><b>#{item.rank}</b><div className="postavatar">{initials(item.profile?.full_name)}</div><span><strong>{item.profile?.full_name || "Pulsly-medlem"}</strong><small>{item.profile?.department || ""}</small></span><strong>{item.points.toLocaleString("sv-SE")} p</strong></div>)}</Card></>}
       {page === "teams" && <><Title eyebrow="LAG" title="Pulsly-lag" text="Gå med i ett lag och bygg gemensam aktivitet."/><div className="grid events">{teams.map((team) => { const joined = teamMemberships.some((m) => m.team_id === team.id); return <Card key={team.id}><Users className="green"/><h2>{team.name}</h2><p>{team.description || "Pulsly-lag"}</p><span>{teamMembers[team.id]?.length || 0} medlemmar</span><button className={joined ? "light full" : "dark full"} onClick={() => toggleTeam(team.id, joined)}>{joined ? "Lämna lag" : "Gå med i laget"}</button></Card>; })}</div></>}
       {page === "notifications" && <><Title eyebrow="NOTISER" title="Notiscenter" text={`${unreadCount} olästa notiser`} action={<button className="light" onClick={readAllNotifications}>Markera alla lästa</button>}/><Card>{notifications.length ? notifications.map((item) => <button className={`notificationRow ${item.read ? "" : "unread"}`} key={item.id} onClick={() => openNotification(item)}><Bell size={19}/><span><b>{item.title}</b><small>{item.message}</small></span><small>{fmtDate(item.created_at)}</small></button>) : <Empty icon={Bell} text="Inga notiser"/>}</Card></>}
+      {page === "search" && <>
+        <Title eyebrow="SOK" title="Sok i Pulsly" text="Sok efter medlemmar, event, utmaningar och lag."/>
+        <Card>
+          <form onSubmit={runGlobalSearch} className="section">
+            <input style={{flex:1}} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Skriv minst 2 tecken..."/>
+            <button className="dark" disabled={searching}><Search size={18}/>{searching ? "Soker..." : "Sok"}</button>
+          </form>
+        </Card>
+        <div className="grid two" style={{marginTop:16}}>
+          <Card><h2>Personer</h2>{searchResults.people?.length ? searchResults.people.map((p) => <div className="mini-row" key={p.id}><div><b>{p.full_name || "Pulsly-medlem"}</b><small>{[p.department,p.location].filter(Boolean).join(" · ")}</small></div></div>) : <p>Inga resultat.</p>}</Card>
+          <Card><h2>Event</h2>{searchResults.events?.length ? searchResults.events.map((e) => <button className="mini-row searchRow" key={e.id} onClick={() => setPage("events")}><div><b>{e.title}</b><small>{fmtDate(e.starts_at)} · {e.activity_type}</small></div><ChevronRight/></button>) : <p>Inga resultat.</p>}</Card>
+          <Card><h2>Utmaningar</h2>{searchResults.challenges?.length ? searchResults.challenges.map((c) => <button className="mini-row searchRow" key={c.id} onClick={() => setPage("challenges")}><div><b>{c.title}</b><small>{c.challenge_type || "Utmaning"}</small></div><ChevronRight/></button>) : <p>Inga resultat.</p>}</Card>
+          <Card><h2>Lag</h2>{searchResults.teams?.length ? searchResults.teams.map((t) => <button className="mini-row searchRow" key={t.id} onClick={() => setPage("teams")}><div><b>{t.name}</b><small>{t.description || "Pulsly-lag"}</small></div><ChevronRight/></button>) : <p>Inga resultat.</p>}</Card>
+        </div>
+      </>}
+
+      {page === "data" && <>
+        <Title eyebrow="MINA DATA" title="Ladda ner mina Pulsly-data" text="Exportera dina egna aktivitets- och halsodata som CSV."/>
+        <div className="grid two">
+          <Card><h2>Aktiviteter</h2><p>Verifierade aktiviteter, distans, steg, poang och gruppmultiplikator.</p><button className="dark full" onClick={downloadActivities}>Ladda ner aktiviteter</button></Card>
+          <Card><h2>Halsa</h2><p>Steg, aktiva minuter, distans, kalorier och vilopuls.</p><button className="dark full" onClick={downloadHealth}>Ladda ner halsodata</button></Card>
+          <Card><h2>VO2 max</h2><p>Din importerade VO2 max-historik fran anslutna enheter.</p><button className="light full" onClick={downloadVo2}>Ladda ner VO2 max</button></Card>
+        </div>
+      </>}
+
+      {page === "admin" && adminAccess?.isAdmin && <>
+        <Title eyebrow="ADMIN" title="Pulsly administration" text={`Inloggad som ${adminAccess.role}.`}/>
+        {adminLoading ? <Card><p>Laddar adminoversikt...</p></Card> : <>
+          <div className="home-metrics">
+            <Metric icon={User} label="Anvandare" value={adminOverview?.users || 0}/>
+            <Metric icon={Activity} label="Aktiviteter" value={adminOverview?.activities || 0}/>
+            <Metric icon={CalendarDays} label="Event" value={adminOverview?.events || 0}/>
+            <Metric icon={Users} label="Lag" value={adminOverview?.teams || 0}/>
+          </div>
+          <div className="grid two" style={{marginTop:16}}>
+            <Card><h2>Senaste anvandare</h2>{adminUsers.slice(0,20).map((u) => <div className="mini-row" key={u.id}><div><b>{u.full_name || "Pulsly-medlem"}</b><small>{u.role} · {u.department || "Ingen avdelning"}</small></div></div>)}</Card>
+            <Card><h2>Health-synkfel</h2>{healthSyncFailures.length ? healthSyncFailures.map((f) => <div className="mini-row" key={f.id}><div><b>{f.provider}</b><small>{f.status} · {f.message || "Ingen detalj"}</small></div></div>) : <p>Inga registrerade synkfel.</p>}</Card>
+          </div>
+        </>}
+      </>}
+
       {page === "privacy" && <><Title eyebrow="INTEGRITET" title="Integritet och delning" text="Du bestämmer vad som delas från aktiviteter och hälsodata."/><div className="grid two"><Card><h2>Standarddelning</h2><label>Profilsynlighet<select value={privacy?.profile_visibility || "members"} onChange={(e) => persistPrivacy({ profile_visibility:e.target.value })}><option value="private">Privat</option><option value="members">Pulsly-medlemmar</option><option value="public">Offentlig</option></select></label><label>Aktivitetsinlägg<select value={privacy?.wall_default_visibility || "members"} onChange={(e) => persistPrivacy({ wall_default_visibility:e.target.value })}><option value="private">Privat</option><option value="members">Pulsly-medlemmar</option><option value="public">Offentligt</option></select></label><label>Integritetsradie<input type="number" min="0" max="5000" value={privacy?.privacy_radius_meters ?? 200} onChange={(e) => persistPrivacy({ privacy_radius_meters:Number(e.target.value) })}/></label></Card><Card><h2>Känslig hälsodata</h2>{[["share_route_default","Dela GPS-rutt som standard"],["share_heart_rate_default","Dela puls som standard"],["share_vo2max_default","Dela VO₂ max som standard"],["share_health_stats_default","Dela hälsostatistik som standard"]].map(([key,label]) => <button className="privacyToggle" key={key} onClick={() => persistPrivacy({ [key]:!privacy?.[key] })}><span>{label}</span><span className={`switch ${privacy?.[key] ? "on" : ""}`}><i/></span></button>)}<button className="danger full" onClick={removeHealthData}>Radera importerad hälsodata</button></Card></div></>}
       {page === "profile" && <><Title eyebrow="MIN PROFIL" title={fullName} text={session.user.email}/><div className="grid profile"><Card className="center"><div className="bigavatar">{initials(fullName)}</div><h2>{fullName}</h2><p>{profile?.department || "Pulsly-medlem"}</p><button className="logout full" onClick={signOut}><LogOut size={18}/>Logga ut</button></Card><Card><div className="section"><div><h2>Röstcoach</h2><p>Distans, tid och tempo under aktiviteten.</p></div><button className={`voice ${settings?.voice_coach_enabled ? "on" : ""}`} onClick={() => saveVoice({ voice_coach_enabled: !settings?.voice_coach_enabled })}>{settings?.voice_coach_enabled ? <Mic/> : <MicOff/>}</button></div><label>Läs upp varje<select value={settings?.voice_interval_meters || 1000} onChange={(e) => saveVoice({ voice_interval_meters: Number(e.target.value) })}><option value={500}>500 meter</option><option value={1000}>1 kilometer</option><option value={2000}>2 kilometer</option></select></label><div className="settings">{[["voice_total_time", "Total tid"], ["voice_split_time", "Senaste kilometertid"], ["voice_average_pace", "Genomsnittstempo"], ["voice_speed", "Hastighet vid cykling"]].map(([key, label]) => <button key={key} onClick={() => saveVoice({ [key]: !settings?.[key] })}><span>{label}</span><span className={`switch ${settings?.[key] ? "on" : ""}`}><i/></span></button>)}</div><button className="light full" onClick={() => speak("Pulsly röstcoach. En kilometer. Total tid fem minuter och fyrtiotvå sekunder.")}><Mic size={18}/>Testa röstcoach</button></Card><Card><h2>Hälsoanslutningar</h2><HealthRow icon={Smartphone} name="Apple Health" text="iPhone"/><HealthRow icon={Activity} name="Health Connect" text="Android och Samsung Watch"/><HealthRow icon={Watch} name="Garmin Connect" text="Planerad integration"/></Card></div></>}
     </main>
