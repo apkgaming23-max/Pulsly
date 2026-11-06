@@ -22,13 +22,11 @@ import {
   RefreshCw,
   Route,
   Send,
-  Settings,
   Share2,
   ShieldCheck,
   Smartphone,
   Square,
   Timer,
-  Trophy,
   User,
   Users,
   Watch,
@@ -48,14 +46,28 @@ const activityTypes = [
     paceMode: true,
   },
   {
-    id: "run",
+    id: "powerwalk",
+    name: "Powerwalk",
+    icon: Footprints,
+    pointsPerMinute: 12,
+    paceMode: true,
+  },
+  {
+    id: "jogging",
+    name: "Jogging",
+    icon: Activity,
+    pointsPerMinute: 14,
+    paceMode: true,
+  },
+  {
+    id: "running",
     name: "Löpning",
     icon: Activity,
     pointsPerMinute: 15,
     paceMode: true,
   },
   {
-    id: "bike",
+    id: "cycling",
     name: "Cykling",
     icon: Bike,
     pointsPerMinute: 12,
@@ -63,8 +75,26 @@ const activityTypes = [
   },
 ];
 
+const initialEventForm = {
+  title: "",
+  description: "",
+  activityType: "Jogging",
+  startsAt: "",
+  locationName: "",
+};
+
 function Card({ children, className = "" }) {
   return <div className={`card ${className}`}>{children}</div>;
+}
+
+function Metric({ icon: Icon, label, value }) {
+  return (
+    <div className="metric">
+      <Icon size={19} />
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
 }
 
 function formatDuration(totalSeconds) {
@@ -140,23 +170,13 @@ function haversine(first, second) {
   );
 }
 
-function Metric({ icon: Icon, label, value }) {
-  return (
-    <div className="metric">
-      <Icon size={19} />
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function AppMap({ positions, active = false }) {
+function ActivityMap({ positions = [], active = false }) {
   return (
     <div className="map">
       <div className="map-grid" />
-      <div className="road road-a" />
-      <div className="road road-b" />
-      <div className="road road-c" />
+      <div className="road road-one" />
+      <div className="road road-two" />
+      <div className="road road-three" />
 
       <svg
         className="route-svg"
@@ -196,7 +216,7 @@ function AppMap({ positions, active = false }) {
       </div>
 
       <div className="map-count">
-        {positions?.length || 0} punkter
+        {positions.length} GPS-punkter
       </div>
     </div>
   );
@@ -226,23 +246,15 @@ export default function App() {
   const [splits, setSplits] = useState([]);
   const [selectedEventId, setSelectedEventId] = useState("");
 
-  const [completedActivity, setCompletedActivity] = useState(null);
+  const [eventDialog, setEventDialog] = useState(false);
+  const [eventForm, setEventForm] = useState(initialEventForm);
+
   const [shareDialog, setShareDialog] = useState(false);
+  const [completedActivity, setCompletedActivity] = useState(null);
   const [shareMessage, setShareMessage] = useState("");
   const [shareVisibility, setShareVisibility] = useState("members");
   const [shareRoute, setShareRoute] = useState(false);
   const [shareSplits, setShareSplits] = useState(true);
-
-  const [eventDialog, setEventDialog] = useState(false);
-  const [eventForm, setEventForm] = useState({
-    title: "",
-    description: "",
-    activityType: "Löpning",
-    startsAt: "",
-    endsAt: "",
-    joinDeadline: "",
-    locationName: "",
-  });
 
   const watchId = useRef(null);
   const lastPosition = useRef(null);
@@ -299,19 +311,25 @@ export default function App() {
     let mounted = true;
 
     async function initialise() {
-      const {
-        data: { session: currentSession },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session: currentSession },
+        } = await supabase.auth.getSession();
 
-      if (!mounted) return;
+        if (!mounted) return;
 
-      setSession(currentSession);
+        setSession(currentSession);
 
-      if (currentSession?.user) {
-        await loadAll(currentSession.user.id);
+        if (currentSession?.user) {
+          await loadAll(currentSession.user.id);
+        }
+      } catch (error) {
+        console.error(error);
+      } finally {
+        if (mounted) {
+          setAuthLoading(false);
+        }
       }
-
-      setAuthLoading(false);
     }
 
     initialise();
@@ -361,20 +379,21 @@ export default function App() {
       Number(settings?.voice_interval_meters) || 1000;
 
     const currentMeters = distanceKilometers * 1000;
-    const passedIntervals = Math.floor(currentMeters / intervalMeters);
-    const previousIntervals = Math.floor(
+    const currentInterval = Math.floor(
+      currentMeters / intervalMeters
+    );
+
+    const previousInterval = Math.floor(
       lastAnnouncedDistance.current / intervalMeters
     );
 
-    if (passedIntervals <= previousIntervals) return;
+    if (currentInterval <= previousInterval) return;
 
     const splitSeconds =
       elapsedSeconds - lastSplitElapsed.current;
 
-    const splitNumber = passedIntervals;
-
     const split = {
-      split_number: splitNumber,
+      split_number: currentInterval,
       distance_meters: intervalMeters,
       elapsed_seconds: elapsedSeconds,
       split_seconds: splitSeconds,
@@ -393,7 +412,7 @@ export default function App() {
     lastSplitElapsed.current = elapsedSeconds;
     lastAnnouncedDistance.current = currentMeters;
 
-    speakSplit(splitNumber, splitSeconds);
+    speakSplit(currentInterval, splitSeconds);
   }, [
     distanceKilometers,
     elapsedSeconds,
@@ -403,7 +422,13 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    return () => stopGpsWatcher();
+    return () => {
+      stopGpsWatcher();
+
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
   }, []);
 
   async function loadAll(userId) {
@@ -417,13 +442,20 @@ export default function App() {
   }
 
   async function loadProfile(userId) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", userId)
       .maybeSingle();
 
-    if (data) setProfile(data);
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    if (data) {
+      setProfile(data);
+    }
   }
 
   async function loadActivities(userId) {
@@ -445,11 +477,15 @@ export default function App() {
   }
 
   async function loadSettings(userId) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("user_settings")
       .select("*")
       .eq("user_id", userId)
       .maybeSingle();
+
+    if (error) {
+      console.error(error);
+    }
 
     setSettings(
       data || {
@@ -461,14 +497,15 @@ export default function App() {
         voice_split_time: true,
         voice_average_pace: true,
         voice_speed: true,
+        voice_language: "sv-SE",
       }
     );
   }
 
   async function loadEvents(userId) {
     const [
-      { data: eventData },
-      { data: inviteData },
+      { data: eventData, error: eventError },
+      { data: inviteData, error: inviteError },
     ] = await Promise.all([
       supabase
         .from("group_events")
@@ -476,6 +513,7 @@ export default function App() {
         .order("starts_at", {
           ascending: true,
         }),
+
       supabase
         .from("group_event_invites")
         .select(`
@@ -487,6 +525,15 @@ export default function App() {
           ascending: false,
         }),
     ]);
+
+    if (eventError) {
+      console.error(eventError);
+      notifyError(eventError.message);
+    }
+
+    if (inviteError) {
+      console.error(inviteError);
+    }
 
     setEvents(eventData || []);
     setInvites(inviteData || []);
@@ -539,12 +586,18 @@ export default function App() {
 
   function notify(value) {
     setMessage(value);
-    window.setTimeout(() => setMessage(""), 3500);
+
+    window.setTimeout(() => {
+      setMessage("");
+    }, 3500);
   }
 
   function notifyError(value) {
     setErrorMessage(value);
-    window.setTimeout(() => setErrorMessage(""), 5000);
+
+    window.setTimeout(() => {
+      setErrorMessage("");
+    }, 5500);
   }
 
   function stopGpsWatcher() {
@@ -564,6 +617,7 @@ export default function App() {
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
+
     utterance.lang = settings?.voice_language || "sv-SE";
     utterance.rate = 0.95;
     utterance.pitch = 1;
@@ -581,33 +635,36 @@ export default function App() {
     const splitRemainingSeconds = Math.round(splitSeconds % 60);
 
     const pace = formatPace(averagePace);
+    const [paceMinutes, paceSeconds] = pace.split(":");
 
     let text = `${splitNumber} kilometer.`;
 
     if (settings.voice_total_time) {
       text += ` Total tid ${totalMinutes} minuter`;
+
       if (totalSeconds > 0) {
         text += ` och ${totalSeconds} sekunder`;
       }
+
       text += ".";
     }
 
     if (settings.voice_split_time) {
       text += ` Senaste kilometer ${splitMinutes} minuter`;
+
       if (splitRemainingSeconds > 0) {
         text += ` och ${splitRemainingSeconds} sekunder`;
       }
+
       text += ".";
     }
 
     if (
       settings.voice_average_pace &&
-      activityType.paceMode
+      activityType.paceMode &&
+      pace !== "--:--"
     ) {
-      text += ` Genomsnittstempo ${pace.replace(
-        ":",
-        " minuter och "
-      )} sekunder per kilometer.`;
+      text += ` Genomsnittstempo ${paceMinutes} minuter och ${paceSeconds} sekunder per kilometer.`;
     }
 
     if (
@@ -647,49 +704,50 @@ export default function App() {
       }.`
     );
 
-    watchId.current = navigator.geolocation.watchPosition(
-      ({ coords }) => {
-        const point = {
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          accuracy: coords.accuracy,
-          recordedAt: new Date().toISOString(),
-        };
+    watchId.current =
+      navigator.geolocation.watchPosition(
+        ({ coords }) => {
+          const point = {
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            accuracy: coords.accuracy,
+            recordedAt: new Date().toISOString(),
+          };
 
-        if (
-          lastPosition.current &&
-          coords.accuracy <= 80
-        ) {
-          const segment = haversine(
-            lastPosition.current,
-            point
-          );
-
-          if (segment > 0 && segment < 0.5) {
-            setDistanceKilometers(
-              (current) => current + segment
+          if (
+            lastPosition.current &&
+            coords.accuracy <= 80
+          ) {
+            const segment = haversine(
+              lastPosition.current,
+              point
             );
+
+            if (segment > 0 && segment < 0.5) {
+              setDistanceKilometers(
+                (current) => current + segment
+              );
+            }
           }
+
+          lastPosition.current = point;
+
+          setPositions((current) => [
+            ...current,
+            point,
+          ]);
+        },
+        () => {
+          notifyError(
+            "GPS kunde inte startas. Tillåt exakt plats för Pulsly."
+          );
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 2000,
+          timeout: 12000,
         }
-
-        lastPosition.current = point;
-
-        setPositions((current) => [
-          ...current,
-          point,
-        ]);
-      },
-      () => {
-        notifyError(
-          "GPS kunde inte startas. Tillåt exakt plats för Pulsly."
-        );
-      },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 2000,
-        timeout: 12000,
-      }
-    );
+      );
   }
 
   async function finishActivity() {
@@ -702,8 +760,13 @@ export default function App() {
     );
 
     const durationSeconds = Math.max(elapsedSeconds, 60);
-    const minutes = Math.max(1, Math.round(durationSeconds / 60));
-    const basePoints = minutes * activityType.pointsPerMinute;
+    const minutes = Math.max(
+      1,
+      Math.round(durationSeconds / 60)
+    );
+
+    const basePoints =
+      minutes * activityType.pointsPerMinute;
 
     try {
       const { data: activity, error } = await supabase
@@ -725,10 +788,13 @@ export default function App() {
           verified: positions.length >= 2,
           verification_source: "GPS",
           event_id: selectedEventId || null,
+
           average_pace_seconds_per_km:
-            activityType.paceMode && distanceKilometers > 0
+            activityType.paceMode &&
+            distanceKilometers > 0
               ? Math.round(averagePace)
               : null,
+
           average_speed_kmh:
             elapsedSeconds > 0
               ? Number(currentSpeed.toFixed(2))
@@ -753,7 +819,9 @@ export default function App() {
           .from("activity_routes")
           .insert(routeRows);
 
-        if (routeError) console.error(routeError);
+        if (routeError) {
+          console.error(routeError);
+        }
       }
 
       if (splits.length > 0) {
@@ -767,11 +835,13 @@ export default function App() {
           .from("activity_splits")
           .insert(splitRows);
 
-        if (splitError) console.error(splitError);
+        if (splitError) {
+          console.error(splitError);
+        }
       }
 
       if (selectedEventId) {
-        await supabase
+        const { error: matchError } = await supabase
           .from("event_activity_matches")
           .upsert(
             {
@@ -785,6 +855,10 @@ export default function App() {
               onConflict: "event_id,user_id",
             }
           );
+
+        if (matchError) {
+          console.error(matchError);
+        }
       }
 
       speak(
@@ -833,6 +907,118 @@ export default function App() {
     }
   }
 
+  async function createEvent(event) {
+    event.preventDefault();
+
+    try {
+      if (!eventForm.title || !eventForm.startsAt) {
+        throw new Error("Fyll i namn och starttid.");
+      }
+
+      const startsAt = new Date(eventForm.startsAt);
+
+      if (startsAt <= new Date()) {
+        throw new Error("Starttiden måste ligga i framtiden.");
+      }
+
+      const eventDate = startsAt.toISOString().slice(0, 10);
+
+      const { data: createdEvent, error } = await supabase
+        .from("group_events")
+        .insert({
+          created_by: session.user.id,
+          title: eventForm.title.trim(),
+          description:
+            eventForm.description.trim() || null,
+          activity_type: eventForm.activityType,
+          event_date: eventDate,
+          starts_at: startsAt.toISOString(),
+          ends_at: null,
+          join_deadline: null,
+          location_name:
+            eventForm.locationName.trim() || null,
+          status: "open",
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const { error: joinError } = await supabase.rpc(
+        "join_group_event",
+        {
+          p_event_id: createdEvent.id,
+        }
+      );
+
+      if (joinError) {
+        console.error(joinError);
+        notify(
+          "Eventet skapades, men automatisk anmälan misslyckades."
+        );
+      } else {
+        notify(
+          "Eventet skapades och du är automatiskt anmäld."
+        );
+      }
+
+      setEventDialog(false);
+      setEventForm(initialEventForm);
+
+      await loadEvents(session.user.id);
+    } catch (error) {
+      console.error(error);
+      notifyError(error.message);
+    }
+  }
+
+  async function joinOpenEvent(eventId) {
+    try {
+      const { error } = await supabase.rpc(
+        "join_group_event",
+        {
+          p_event_id: eventId,
+        }
+      );
+
+      if (error) throw error;
+
+      await loadEvents(session.user.id);
+
+      notify("Du är nu anmäld till eventet.");
+    } catch (error) {
+      console.error(error);
+
+      notifyError(
+        error.message ||
+          "Det gick inte att anmäla dig."
+      );
+    }
+  }
+
+  async function respondToInvite(inviteId, response) {
+    const { error } = await supabase.rpc(
+      "respond_to_group_event",
+      {
+        p_invite_id: inviteId,
+        p_response: response,
+      }
+    );
+
+    if (error) {
+      notifyError(error.message);
+      return;
+    }
+
+    await loadEvents(session.user.id);
+
+    notify(
+      response === "accepted"
+        ? "Du är nu anmäld till eventet."
+        : "Du har avböjt eventet."
+    );
+  }
+
   async function publishActivity() {
     if (!completedActivity) return;
 
@@ -861,40 +1047,47 @@ export default function App() {
         shareRoute &&
         completedActivity.savedPositions?.length > 0
       ) {
-        const allPoints = completedActivity.savedPositions;
+        const allPoints =
+          completedActivity.savedPositions;
 
         const pointsToShare =
           allPoints.length > 10
             ? allPoints.slice(2, -2)
             : allPoints;
 
-        const rows = pointsToShare.map((point, index) => ({
-          post_id: post.id,
-          activity_id: completedActivity.id,
-          user_id: session.user.id,
-          route_order: index,
-          latitude: point.latitude,
-          longitude: point.longitude,
-        }));
+        const routeRows = pointsToShare.map(
+          (point, index) => ({
+            post_id: post.id,
+            activity_id: completedActivity.id,
+            user_id: session.user.id,
+            route_order: index,
+            latitude: point.latitude,
+            longitude: point.longitude,
+          })
+        );
 
         const { error: routeError } = await supabase
           .from("activity_post_routes")
-          .insert(rows);
+          .insert(routeRows);
 
-        if (routeError) throw routeError;
+        if (routeError) {
+          throw routeError;
+        }
       }
 
       setShareDialog(false);
+      setCompletedActivity(null);
       setShareMessage("");
       setShareRoute(false);
       setShareSplits(true);
-      setCompletedActivity(null);
 
       await loadPosts();
 
       setPage("wall");
       notify("Aktiviteten publicerades på väggen.");
     } catch (error) {
+      console.error(error);
+
       notifyError(
         `Inlägget kunde inte publiceras: ${
           error.message || "okänt fel"
@@ -903,116 +1096,12 @@ export default function App() {
     }
   }
 
-  async function respondToInvite(inviteId, response) {
-    const { error } = await supabase.rpc(
-      "respond_to_group_event",
-      {
-        p_invite_id: inviteId,
-        p_response: response,
-      }
-    );
-
-    if (error) {
-      notifyError(error.message);
-      return;
-    }
-
-    await loadEvents(session.user.id);
-
-    notify(
-      response === "accepted"
-        ? "Du är nu anmäld till eventet."
-        : "Du har avböjt eventet."
-    );
-  }
-
-  async function createEvent(event) {
-    event.preventDefault();
-
-    try {
-      if (
-        !eventForm.title ||
-        !eventForm.startsAt ||
-        !eventForm.endsAt ||
-        !eventForm.joinDeadline
-      ) {
-        throw new Error("Fyll i alla obligatoriska fält.");
-      }
-
-      const startsAt = new Date(eventForm.startsAt);
-      const eventDate = startsAt.toISOString().slice(0, 10);
-
-      const { error } = await supabase
-        .from("group_events")
-        .insert({
-          created_by: session.user.id,
-          title: eventForm.title.trim(),
-          description: eventForm.description.trim() || null,
-          activity_type: eventForm.activityType,
-          event_date: eventDate,
-          starts_at: startsAt.toISOString(),
-          ends_at: new Date(eventForm.endsAt).toISOString(),
-          join_deadline: new Date(
-            eventForm.joinDeadline
-          ).toISOString(),
-          location_name:
-            eventForm.locationName.trim() || null,
-          status: "open",
-        });
-
-      if (error) throw error;
-
-      setEventDialog(false);
-
-      setEventForm({
-        title: "",
-        description: "",
-        activityType: "Löpning",
-        startsAt: "",
-        endsAt: "",
-        joinDeadline: "",
-        locationName: "",
-      });
-
-      await loadEvents(session.user.id);
-
-      notify("Eventet skapades.");
-    } catch (error) {
-      notifyError(error.message);
-    }
-  }
-
-  async function joinOpenEvent(eventId) {
-    try {
-      const selectedEvent = events.find(
-        (item) => item.id === eventId
-      );
-
-      if (!selectedEvent) return;
-
-      const { error } = await supabase
-        .from("group_event_invites")
-        .insert({
-          event_id: eventId,
-          invited_user_id: session.user.id,
-          invited_by: selectedEvent.created_by,
-          status: "accepted",
-          responded_at: new Date().toISOString(),
-        });
-
-      if (error) throw error;
-
-      await loadEvents(session.user.id);
-      notify("Du är nu anmäld till eventet.");
-    } catch (error) {
-      notifyError(error.message);
-    }
-  }
-
   async function toggleLike(post) {
-    const hasLiked = post.activity_post_likes?.some(
-      (like) => like.user_id === session.user.id
-    );
+    const hasLiked =
+      post.activity_post_likes?.some(
+        (like) =>
+          like.user_id === session.user.id
+      );
 
     if (hasLiked) {
       await supabase
@@ -1058,7 +1147,10 @@ export default function App() {
 
   async function signOut() {
     stopGpsWatcher();
-    window.speechSynthesis?.cancel();
+
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
 
     await supabase.auth.signOut();
 
@@ -1069,15 +1161,19 @@ export default function App() {
 
   const acceptedEventIds = new Set(
     invites
-      .filter((invite) => invite.status === "accepted")
+      .filter(
+        (invite) =>
+          invite.status === "accepted"
+      )
       .map((invite) => invite.event_id)
   );
 
-  const upcomingAcceptedEvents = events.filter(
-    (event) =>
-      acceptedEventIds.has(event.id) &&
-      new Date(event.ends_at) > new Date()
-  );
+  const upcomingAcceptedEvents =
+    events.filter(
+      (event) =>
+        acceptedEventIds.has(event.id) &&
+        new Date(event.starts_at) > new Date()
+    );
 
   const navigation = [
     ["home", "Hem", Home],
@@ -1090,7 +1186,7 @@ export default function App() {
   if (authLoading) {
     return (
       <div className="loading-page">
-        <Activity size={44} />
+        <Activity size={45} />
         <h2>Laddar Pulsly...</h2>
       </div>
     );
@@ -1116,24 +1212,32 @@ export default function App() {
       )}
 
       <header>
-        <button className="logo" onClick={() => setPage("home")}>
+        <button
+          className="logo"
+          onClick={() => setPage("home")}
+        >
           <span>
             <Activity size={23} />
           </span>
+
           Pulsly
         </button>
 
         <nav>
-          {navigation.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              className={page === id ? "active" : ""}
-              onClick={() => setPage(id)}
-            >
-              <Icon size={17} />
-              {label}
-            </button>
-          ))}
+          {navigation.map(
+            ([id, label, Icon]) => (
+              <button
+                key={id}
+                className={
+                  page === id ? "active" : ""
+                }
+                onClick={() => setPage(id)}
+              >
+                <Icon size={17} />
+                {label}
+              </button>
+            )
+          )}
         </nav>
 
         <button
@@ -1149,11 +1253,15 @@ export default function App() {
           <>
             <section className="page-title">
               <div>
-                <span className="eyebrow">PULSLY</span>
+                <span className="eyebrow">
+                  PULSLY
+                </span>
+
                 <h1>Hej {firstName}! 👋</h1>
 
                 <p>
-                  All verifierad aktivitet räknas. Ingen daglig
+                  All verifierad aktivitet
+                  räknas. Ingen daglig
                   poänggräns.
                 </p>
               </div>
@@ -1177,7 +1285,9 @@ export default function App() {
                 <Metric
                   icon={Footprints}
                   label="Steg"
-                  value={totals.steps.toLocaleString("sv-SE")}
+                  value={totals.steps.toLocaleString(
+                    "sv-SE"
+                  )}
                 />
 
                 <Metric
@@ -1189,13 +1299,17 @@ export default function App() {
                 <Metric
                   icon={Route}
                   label="Distans"
-                  value={`${totals.distance.toFixed(1)} km`}
+                  value={`${totals.distance.toFixed(
+                    1
+                  )} km`}
                 />
 
                 <Metric
                   icon={Zap}
                   label="Poäng"
-                  value={totals.points.toLocaleString("sv-SE")}
+                  value={totals.points.toLocaleString(
+                    "sv-SE"
+                  )}
                 />
               </div>
             </Card>
@@ -1205,7 +1319,9 @@ export default function App() {
                 <div className="section-header">
                   <div>
                     <h2>Aktivitetsvägg</h2>
-                    <p>Se vad medlemmarna har delat.</p>
+                    <p>
+                      Se vad medlemmarna har delat.
+                    </p>
                   </div>
 
                   <button
@@ -1218,24 +1334,40 @@ export default function App() {
 
                 {posts.length === 0 ? (
                   <div className="empty">
-                    <Share2 size={34} />
-                    <strong>Inga inlägg ännu</strong>
+                    <Share2 size={36} />
+                    <strong>
+                      Inga inlägg ännu
+                    </strong>
                     <span>
-                      Avsluta en aktivitet och välj att dela den.
+                      Avsluta en aktivitet och
+                      välj att dela den.
                     </span>
                   </div>
                 ) : (
-                  posts.slice(0, 2).map((post) => (
-                    <div className="mini-post" key={post.id}>
-                      <strong>
-                        {post.profiles?.full_name || "Pulsly-medlem"}
-                      </strong>
+                  posts.slice(0, 3).map((post) => (
+                    <div
+                      className="mini-row"
+                      key={post.id}
+                    >
+                      <div>
+                        <strong>
+                          {post.profiles?.full_name ||
+                            "Pulsly-medlem"}
+                        </strong>
+
+                        <span>
+                          {
+                            post.activities
+                              ?.activity_type
+                          }
+                        </span>
+                      </div>
 
                       <span>
-                        {post.activities?.activity_type} ·{" "}
                         {(
                           Number(
-                            post.activities?.distance_meters || 0
+                            post.activities
+                              ?.distance_meters || 0
                           ) / 1000
                         ).toFixed(2)}{" "}
                         km
@@ -1249,7 +1381,11 @@ export default function App() {
                 <div className="section-header">
                   <div>
                     <h2>Kommande event</h2>
-                    <p>Anmäl dig före start.</p>
+
+                    <p>
+                      Anmälan är öppen fram
+                      till eventets start.
+                    </p>
                   </div>
 
                   <button
@@ -1261,19 +1397,31 @@ export default function App() {
                 </div>
 
                 {events.length === 0 ? (
-                  <div className="empty small-empty">
-                    <CalendarDays size={32} />
-                    <strong>Inga event ännu</strong>
+                  <div className="empty">
+                    <CalendarDays size={34} />
+                    <strong>
+                      Inga event ännu
+                    </strong>
                   </div>
                 ) : (
                   events.slice(0, 3).map((event) => (
-                    <div className="event-row" key={event.id}>
+                    <div
+                      className="mini-row"
+                      key={event.id}
+                    >
                       <div>
-                        <strong>{event.title}</strong>
-                        <span>{formatDate(event.starts_at)}</span>
+                        <strong>
+                          {event.title}
+                        </strong>
+
+                        <span>
+                          {formatDate(
+                            event.starts_at
+                          )}
+                        </span>
                       </div>
 
-                      <span className="event-type">
+                      <span className="pill">
                         {event.activity_type}
                       </span>
                     </div>
@@ -1288,11 +1436,15 @@ export default function App() {
           <>
             <section className="page-title">
               <div>
-                <span className="eyebrow">LIVE TRACKING</span>
+                <span className="eyebrow">
+                  LIVE TRACKING
+                </span>
+
                 <h1>Spåra aktivitet</h1>
 
                 <p>
-                  Pulsly registrerar GPS, tid, distans, tempo och
+                  Pulsly registrerar GPS,
+                  tid, tempo, hastighet och
                   kilometerpasseringar.
                 </p>
               </div>
@@ -1300,7 +1452,7 @@ export default function App() {
 
             <div className="tracker-grid">
               <Card>
-                <AppMap
+                <ActivityMap
                   positions={positions}
                   active={tracking && !paused}
                 />
@@ -1310,14 +1462,24 @@ export default function App() {
                     <h3>Kilometertider</h3>
 
                     {splits.map((split) => (
-                      <div key={split.split_number}>
-                        <strong>{split.split_number} km</strong>
+                      <div
+                        key={split.split_number}
+                      >
+                        <strong>
+                          {split.split_number} km
+                        </strong>
+
                         <span>
-                          {formatPace(split.pace_seconds_per_km)}
+                          {formatPace(
+                            split.pace_seconds_per_km
+                          )}
                           /km
                         </span>
+
                         <span>
-                          {formatDuration(split.elapsed_seconds)}
+                          {formatDuration(
+                            split.elapsed_seconds
+                          )}
                         </span>
                       </div>
                     ))}
@@ -1326,7 +1488,7 @@ export default function App() {
               </Card>
 
               <Card>
-                <h2>Aktivitet</h2>
+                <h2>Välj aktivitet</h2>
 
                 <div className="activity-selector">
                   {activityTypes.map((type) => {
@@ -1341,7 +1503,9 @@ export default function App() {
                             ? "selected"
                             : ""
                         }
-                        onClick={() => setActivityType(type)}
+                        onClick={() =>
+                          setActivityType(type)
+                        }
                       >
                         <Icon size={21} />
                         {type.name}
@@ -1357,18 +1521,26 @@ export default function App() {
                     disabled={tracking}
                     value={selectedEventId}
                     onChange={(event) =>
-                      setSelectedEventId(event.target.value)
+                      setSelectedEventId(
+                        event.target.value
+                      )
                     }
                   >
                     <option value="">
                       Ingen gruppaktivitet
                     </option>
 
-                    {upcomingAcceptedEvents.map((event) => (
-                      <option key={event.id} value={event.id}>
-                        {event.title}
-                      </option>
-                    ))}
+                    {upcomingAcceptedEvents.map(
+                      (event) => (
+                        <option
+                          key={event.id}
+                          value={event.id}
+                        >
+                          {event.title} ·{" "}
+                          {event.activity_type}
+                        </option>
+                      )
+                    )}
                   </select>
                 </label>
 
@@ -1381,16 +1553,26 @@ export default function App() {
                   <Metric
                     icon={Route}
                     label="Distans"
-                    value={`${distanceKilometers.toFixed(2)} km`}
+                    value={`${distanceKilometers.toFixed(
+                      2
+                    )} km`}
                   />
 
                   <Metric
                     icon={Clock}
-                    label="Tempo"
+                    label={
+                      activityType.paceMode
+                        ? "Tempo"
+                        : "Hastighet"
+                    }
                     value={
                       activityType.paceMode
-                        ? `${formatPace(averagePace)}/km`
-                        : `${currentSpeed.toFixed(1)} km/h`
+                        ? `${formatPace(
+                            averagePace
+                          )}/km`
+                        : `${currentSpeed.toFixed(
+                            1
+                          )} km/h`
                     }
                   />
 
@@ -1406,8 +1588,11 @@ export default function App() {
                     <Users size={18} />
 
                     <span>
-                      Eventaktivitet. 1,5× tilldelas först efter att
-                      Pulsly verifierat minst två matchande deltagare.
+                      Eventaktivitet. 1,5×
+                      tilldelas först när
+                      aktiviteterna från minst
+                      två anmälda deltagare har
+                      verifierats som liknande.
                     </span>
                   </div>
                 )}
@@ -1424,10 +1609,21 @@ export default function App() {
                   <div className="tracking-actions">
                     <button
                       className="secondary"
-                      onClick={() => setPaused((value) => !value)}
+                      onClick={() =>
+                        setPaused(
+                          (value) => !value
+                        )
+                      }
                     >
-                      {paused ? <Play /> : <Pause />}
-                      {paused ? "Fortsätt" : "Pausa"}
+                      {paused ? (
+                        <Play size={18} />
+                      ) : (
+                        <Pause size={18} />
+                      )}
+
+                      {paused
+                        ? "Fortsätt"
+                        : "Pausa"}
                     </button>
 
                     <button
@@ -1448,40 +1644,60 @@ export default function App() {
           <>
             <section className="page-title">
               <div>
-                <span className="eyebrow">GEMENSAM AKTIVITET</span>
+                <span className="eyebrow">
+                  GEMENSAM AKTIVITET
+                </span>
+
                 <h1>Event</h1>
 
                 <p>
-                  Anmälan görs före start. Gruppbonus verifieras
-                  automatiskt efter eventet.
+                  Anmäl dig före start. Efter
+                  start jämför Pulsly
+                  deltagarnas verifierade
+                  aktiviteter.
                 </p>
               </div>
 
               <button
                 className="primary"
-                onClick={() => setEventDialog(true)}
+                onClick={() =>
+                  setEventDialog(true)
+                }
               >
                 <Plus size={18} />
                 Skapa event
               </button>
             </section>
 
-            {invites.some((invite) => invite.status === "invited") && (
+            {invites.some(
+              (invite) =>
+                invite.status === "invited"
+            ) && (
               <Card className="invite-card">
                 <h2>Inbjudningar</h2>
 
                 {invites
-                  .filter((invite) => invite.status === "invited")
+                  .filter(
+                    (invite) =>
+                      invite.status === "invited"
+                  )
                   .map((invite) => (
-                    <div className="invite-row" key={invite.id}>
+                    <div
+                      className="invite-row"
+                      key={invite.id}
+                    >
                       <div>
                         <strong>
-                          {invite.group_events?.title}
+                          {
+                            invite.group_events
+                              ?.title
+                          }
                         </strong>
 
                         <span>
                           {formatDate(
-                            invite.group_events?.starts_at
+                            invite.group_events
+                              ?.starts_at
                           )}
                         </span>
                       </div>
@@ -1490,7 +1706,10 @@ export default function App() {
                         <button
                           className="accept"
                           onClick={() =>
-                            respondToInvite(invite.id, "accepted")
+                            respondToInvite(
+                              invite.id,
+                              "accepted"
+                            )
                           }
                         >
                           <Check size={18} />
@@ -1500,7 +1719,10 @@ export default function App() {
                         <button
                           className="decline"
                           onClick={() =>
-                            respondToInvite(invite.id, "declined")
+                            respondToInvite(
+                              invite.id,
+                              "declined"
+                            )
                           }
                         >
                           <X size={18} />
@@ -1514,8 +1736,20 @@ export default function App() {
             <div className="event-grid">
               {events.map((event) => {
                 const invite = invites.find(
-                  (item) => item.event_id === event.id
+                  (item) =>
+                    item.event_id === event.id
                 );
+
+                const hasStarted =
+                  new Date(event.starts_at) <=
+                  new Date();
+
+                const isCreator =
+                  event.created_by ===
+                  session.user.id;
+
+                const isJoined =
+                  invite?.status === "accepted";
 
                 return (
                   <Card key={event.id}>
@@ -1524,23 +1758,41 @@ export default function App() {
                         <CalendarDays />
                       </span>
 
-                      <span className={`status ${event.status}`}>
-                        {event.status}
+                      <span
+                        className={`pill ${
+                          hasStarted
+                            ? "started"
+                            : ""
+                        }`}
+                      >
+                        {event.status ===
+                        "cancelled"
+                          ? "Inställt"
+                          : hasStarted
+                            ? "Startat"
+                            : "Anmälan öppen"}
                       </span>
                     </div>
 
                     <h2>{event.title}</h2>
-                    <p>{event.description || event.activity_type}</p>
+
+                    <p>
+                      {event.description ||
+                        event.activity_type}
+                    </p>
 
                     <div className="event-details">
                       <span>
                         <Clock size={16} />
-                        {formatDate(event.starts_at)}
+                        {formatDate(
+                          event.starts_at
+                        )}
                       </span>
 
                       <span>
                         <MapPin size={16} />
-                        {event.location_name || "Plats ej angiven"}
+                        {event.location_name ||
+                          "Plats ej angiven"}
                       </span>
 
                       <span>
@@ -1550,28 +1802,46 @@ export default function App() {
 
                       <span>
                         <Users size={16} />
-                        Minst {event.minimum_participants} deltagare
+                        Minst{" "}
+                        {
+                          event.minimum_participants
+                        }{" "}
+                        verifierade deltagare
                       </span>
                     </div>
 
-                    {invite?.status === "accepted" ? (
+                    {isJoined ? (
                       <div className="joined">
                         <CheckCircle2 size={18} />
                         Du är anmäld
                       </div>
-                    ) : event.created_by === session.user.id ? (
-                      <div className="created-by-me">
-                        Du skapade eventet
-                      </div>
-                    ) : new Date(event.join_deadline) > new Date() ? (
+                    ) : isCreator ? (
                       <button
                         className="primary full"
-                        onClick={() => joinOpenEvent(event.id)}
+                        disabled={hasStarted}
+                        onClick={() =>
+                          joinOpenEvent(event.id)
+                        }
+                      >
+                        {hasStarted
+                          ? "Eventet har startat"
+                          : "Anmäl mig till mitt event"}
+                      </button>
+                    ) : !hasStarted &&
+                      event.status !==
+                        "cancelled" ? (
+                      <button
+                        className="primary full"
+                        onClick={() =>
+                          joinOpenEvent(event.id)
+                        }
                       >
                         Gå med
                       </button>
                     ) : (
-                      <div className="closed">Anmälan stängd</div>
+                      <div className="closed">
+                        Anmälan stängd
+                      </div>
                     )}
                   </Card>
                 );
@@ -1584,16 +1854,23 @@ export default function App() {
           <>
             <section className="page-title">
               <div>
-                <span className="eyebrow">AKTIVITETSVÄGG</span>
+                <span className="eyebrow">
+                  AKTIVITETSVÄGG
+                </span>
+
                 <h1>Pulsly-väggen</h1>
 
                 <p>
-                  Medlemmarna bestämmer själva om aktivitet och rutt
-                  ska delas.
+                  Medlemmen bestämmer själv om
+                  aktivitet och GPS-rutt ska
+                  delas.
                 </p>
               </div>
 
-              <button className="secondary" onClick={loadPosts}>
+              <button
+                className="secondary"
+                onClick={loadPosts}
+              >
                 <RefreshCw size={18} />
                 Uppdatera
               </button>
@@ -1604,32 +1881,62 @@ export default function App() {
                 <Card>
                   <div className="empty">
                     <Share2 size={42} />
-                    <strong>Väggen är tom</strong>
+
+                    <strong>
+                      Väggen är tom
+                    </strong>
+
                     <span>
-                      Avsluta en aktivitet och välj Dela aktivitet.
+                      Avsluta en aktivitet och
+                      välj att dela den.
                     </span>
                   </div>
                 </Card>
               ) : (
                 posts.map((post) => {
-                  const activity = post.activities || {};
-                  const likes = post.activity_post_likes || [];
-                  const comments = post.activity_post_comments || [];
+                  const activity =
+                    post.activities || {};
+
+                  const likes =
+                    post.activity_post_likes ||
+                    [];
+
+                  const comments =
+                    post.activity_post_comments ||
+                    [];
+
+                  const likedByMe =
+                    likes.some(
+                      (like) =>
+                        like.user_id ===
+                        session.user.id
+                    );
 
                   return (
-                    <Card className="post" key={post.id}>
+                    <Card
+                      className="post"
+                      key={post.id}
+                    >
                       <div className="post-header">
                         <div className="post-avatar">
-                          {initials(post.profiles?.full_name)}
+                          {initials(
+                            post.profiles
+                              ?.full_name
+                          )}
                         </div>
 
                         <div>
                           <strong>
-                            {post.profiles?.full_name ||
+                            {post.profiles
+                              ?.full_name ||
                               "Pulsly-medlem"}
                           </strong>
 
-                          <span>{formatDate(post.created_at)}</span>
+                          <span>
+                            {formatDate(
+                              post.created_at
+                            )}
+                          </span>
                         </div>
 
                         {activity.verified && (
@@ -1641,18 +1948,24 @@ export default function App() {
                       </div>
 
                       {post.message && (
-                        <p className="post-message">{post.message}</p>
+                        <p className="post-message">
+                          {post.message}
+                        </p>
                       )}
 
-                      <h2>{activity.activity_type}</h2>
+                      <h2>
+                        {activity.activity_type}
+                      </h2>
 
                       <div className="post-metrics">
                         <Metric
                           icon={Route}
                           label="Distans"
                           value={`${(
-                            Number(activity.distance_meters || 0) /
-                            1000
+                            Number(
+                              activity.distance_meters ||
+                                0
+                            ) / 1000
                           ).toFixed(2)} km`}
                         />
 
@@ -1673,8 +1986,11 @@ export default function App() {
                                   activity.average_pace_seconds_per_km
                                 )}/km`
                               : `${Number(
-                                  activity.average_speed_kmh || 0
-                                ).toFixed(1)} km/h`
+                                  activity.average_speed_kmh ||
+                                    0
+                                ).toFixed(
+                                  1
+                                )} km/h`
                           }
                         />
 
@@ -1683,23 +1999,31 @@ export default function App() {
                           label="Poäng"
                           value={Number(
                             activity.points || 0
-                          ).toLocaleString("sv-SE")}
+                          ).toLocaleString(
+                            "sv-SE"
+                          )}
                         />
                       </div>
 
                       {post.share_route && (
-                        <AppMap positions={[]} active={false} />
+                        <ActivityMap />
                       )}
 
                       <div className="post-actions">
-                        <button onClick={() => toggleLike(post)}>
+                        <button
+                          className={
+                            likedByMe
+                              ? "liked"
+                              : ""
+                          }
+                          onClick={() =>
+                            toggleLike(post)
+                          }
+                        >
                           <Heart
                             size={20}
                             fill={
-                              likes.some(
-                                (like) =>
-                                  like.user_id === session.user.id
-                              )
+                              likedByMe
                                 ? "currentColor"
                                 : "none"
                             }
@@ -1709,7 +2033,9 @@ export default function App() {
                         </button>
 
                         <button>
-                          <MessageCircle size={20} />
+                          <MessageCircle
+                            size={20}
+                          />
                           {comments.length}
                         </button>
 
@@ -1730,8 +2056,12 @@ export default function App() {
           <>
             <section className="page-title">
               <div>
-                <span className="eyebrow">MIN PROFIL</span>
+                <span className="eyebrow">
+                  MIN PROFIL
+                </span>
+
                 <h1>{fullName}</h1>
+
                 <p>{session.user.email}</p>
               </div>
             </section>
@@ -1745,13 +2075,18 @@ export default function App() {
                 <h2>{fullName}</h2>
 
                 <p>
-                  {profile?.department || "Pulsly-medlem"}
+                  {profile?.department ||
+                    "Pulsly-medlem"}
+
                   {profile?.location
                     ? ` · ${profile.location}`
                     : ""}
                 </p>
 
-                <button className="logout" onClick={signOut}>
+                <button
+                  className="logout"
+                  onClick={signOut}
+                >
                   <LogOut size={18} />
                   Logga ut
                 </button>
@@ -1763,13 +2098,17 @@ export default function App() {
                     <h2>Röstcoach</h2>
 
                     <p>
-                      Distans, tid och tempo läses upp under aktiviteten.
+                      Distans, tid och tempo
+                      läses upp under
+                      aktiviteten.
                     </p>
                   </div>
 
                   <button
                     className={`voice-toggle ${
-                      settings?.voice_coach_enabled ? "enabled" : ""
+                      settings?.voice_coach_enabled
+                        ? "enabled"
+                        : ""
                     }`}
                     onClick={() =>
                       saveVoiceSettings({
@@ -1790,33 +2129,57 @@ export default function App() {
                   Läs upp varje
 
                   <select
-                    value={settings?.voice_interval_meters || 1000}
+                    value={
+                      settings?.voice_interval_meters ||
+                      1000
+                    }
                     onChange={(event) =>
                       saveVoiceSettings({
-                        voice_interval_meters: Number(
-                          event.target.value
-                        ),
+                        voice_interval_meters:
+                          Number(
+                            event.target.value
+                          ),
                       })
                     }
                   >
-                    <option value={500}>500 meter</option>
-                    <option value={1000}>1 kilometer</option>
-                    <option value={2000}>2 kilometer</option>
+                    <option value={500}>
+                      500 meter
+                    </option>
+
+                    <option value={1000}>
+                      1 kilometer
+                    </option>
+
+                    <option value={2000}>
+                      2 kilometer
+                    </option>
                   </select>
                 </label>
 
                 <div className="setting-list">
                   {[
-                    ["voice_total_time", "Total tid"],
-                    ["voice_split_time", "Senaste kilometertid"],
-                    ["voice_average_pace", "Genomsnittstempo"],
-                    ["voice_speed", "Hastighet vid cykling"],
+                    [
+                      "voice_total_time",
+                      "Total tid",
+                    ],
+                    [
+                      "voice_split_time",
+                      "Senaste kilometertid",
+                    ],
+                    [
+                      "voice_average_pace",
+                      "Genomsnittstempo",
+                    ],
+                    [
+                      "voice_speed",
+                      "Hastighet vid cykling",
+                    ],
                   ].map(([key, label]) => (
                     <button
                       key={key}
                       onClick={() =>
                         saveVoiceSettings({
-                          [key]: !settings?.[key],
+                          !settings?.[key],
                         })
                       }
                     >
@@ -1824,7 +2187,9 @@ export default function App() {
 
                       <span
                         className={`switch ${
-                          settings?.[key] ? "on" : ""
+                          settings?.[key]
+                            ? "on"
+                            : ""
                         }`}
                       >
                         <i />
@@ -1834,7 +2199,7 @@ export default function App() {
                 </div>
 
                 <button
-              ssName="secondary full"
+                  className="secondary full"
                   onClick={() =>
                     speak(
                       "Pulsly röstcoach. En kilometer. Total tid fem minuter och fyrtiotvå sekunder. Genomsnittstempo fem minuter och fyrtiotvå sekunder per kilometer."
@@ -1851,25 +2216,43 @@ export default function App() {
 
                 <div className="health-service">
                   <Smartphone />
+
                   <div>
-                    <strong>Apple Health</strong>
-                    <span>Aktiveras i iPhone-appen</span>
+                    <strong>
+                      Apple Health
+                    </strong>
+
+                    <span>
+                      Aktiveras i iPhone-appen
+                    </span>
                   </div>
                 </div>
 
                 <div className="health-service">
                   <Activity />
+
                   <div>
-                    <strong>Health Connect</strong>
-                    <span>Aktiveras i Android-appen</span>
+                    <strong>
+                      Health Connect
+                    </strong>
+
+                    <span>
+                      Aktiveras i Android-appen
+                    </span>
                   </div>
                 </div>
 
                 <div className="health-service">
                   <Watch />
+
                   <div>
-                    <strong>Garmin Connect</strong>
-                    <span>Planerad integration</span>
+                    <strong>
+                      Garmin Connect
+                    </strong>
+
+                    <span>
+                      Planerad integration
+                    </span>
                   </div>
                 </div>
               </Card>
@@ -1879,16 +2262,20 @@ export default function App() {
       </main>
 
       <div className="mobile-nav">
-        {navigation.map(([id, label, Icon]) => (
-          <button
-            key={id}
-            className={page === id ? "active" : ""}
-            onClick={() => setPage(id)}
-          >
-            <Icon size={20} />
-            <span>{label}</span>
-          </button>
-        ))}
+        {navigation.map(
+          ([id, label, Icon]) => (
+            <button
+              key={id}
+              className={
+                page === id ? "active" : ""
+              }
+              onClick={() => setPage(id)}
+            >
+              <Icon size={20} />
+              <span>{label}</span>
+            </button>
+          )
+        )}
       </div>
 
       {shareDialog && completedActivity && (
@@ -1904,19 +2291,25 @@ export default function App() {
               <X />
             </button>
 
-            <Share2 size={32} className="modal-icon" />
+            <Share2
+              size={32}
+              className="modal-icon"
+            />
 
             <h2>Dela aktiviteten?</h2>
 
             <p>
-              Aktiviteten är privat tills du väljer att publicera den.
+              Aktiviteten är privat tills du
+              väljer att publicera den.
             </p>
 
             <textarea
               placeholder="Skriv något om aktiviteten..."
               value={shareMessage}
               onChange={(event) =>
-                setShareMessage(event.target.value)
+                setShareMessage(
+                  event.target.value
+                )
               }
             />
 
@@ -1926,38 +2319,73 @@ export default function App() {
               <select
                 value={shareVisibility}
                 onChange={(event) =>
-                  setShareVisibility(event.target.value)
+                  setShareVisibility(
+                    event.target.value
+                  )
                 }
               >
-                <option value="private">Privat</option>
-                <option value="members">Pulsly-medlemmar</option>
-                <option value="public">Offentligt</option>
+                <option value="private">
+                  Privat
+                </option>
+
+                <option value="members">
+                  Pulsly-medlemmar
+                </option>
+
+                <option value="public">
+                  Offentligt
+                </option>
               </select>
             </label>
 
             <button
-              className={`choice ${shareRoute ? "selected" : ""}`}
-              onClick={() => setShareRoute((value) => !value)}
+              className={`choice ${
+                shareRoute ? "selected" : ""
+              }`}
+              onClick={() =>
+                setShareRoute(
+                  (value) => !value
+                )
+              }
             >
               <MapPin />
+
               <span>
-                <strong>Dela faktisk GPS-rutt</strong>
+                <strong>
+                  Dela faktisk GPS-rutt
+                </strong>
+
                 <small>
-                  Start och slut döljs med integritetsmarginal.
+                  Start och slut döljs med
+                  integritetsmarginal.
                 </small>
               </span>
+
               {shareRoute && <Check />}
             </button>
 
             <button
-              className={`choice ${shareSplits ? "selected" : ""}`}
-              onClick={() => setShareSplits((value) => !value)}
+              className={`choice ${
+                shareSplits ? "selected" : ""
+              }`}
+              onClick={() =>
+                setShareSplits(
+                  (value) => !value
+                )
+              }
             >
               <BarChart3 />
+
               <span>
-                <strong>Dela kilometertider</strong>
-                <small>Visa splits i aktivitetsinlägget.</small>
+                <strong>
+                  Dela kilometertider
+                </strong>
+
+                <small>
+                  Visa splits i inlägget.
+                </small>
               </span>
+
               {shareSplits && <Check />}
             </button>
 
@@ -1972,7 +2400,10 @@ export default function App() {
                 Behåll privat
               </button>
 
-              <button className="primary" onClick={publishActivity}>
+              <button
+                className="primary"
+                onClick={publishActivity}
+              >
                 <Send size={18} />
                 Publicera
               </button>
@@ -1983,21 +2414,35 @@ export default function App() {
 
       {eventDialog && (
         <div className="modal-backdrop">
-          <form className="modal" onSubmit={createEvent}>
+          <form
+            className="modal"
+            onSubmit={createEvent}
+          >
             <button
               type="button"
               className="modal-close"
-              onClick={() => setEventDialog(false)}
+              onClick={() =>
+                setEventDialog(false)
+              }
             >
               <X />
             </button>
 
-            <CalendarDays size={32} className="modal-icon" />
+            <CalendarDays
+              size={32}
+              className="modal-icon"
+            />
 
             <h2>Skapa event</h2>
 
+            <p>
+              Anmälan stängs automatiskt när
+              eventets starttid passerats.
+            </p>
+
             <label className="field">
               Namn
+
               <input
                 value={eventForm.title}
                 onChange={(event) =>
@@ -2006,81 +2451,62 @@ export default function App() {
                     title: event.target.value,
                   })
                 }
+                placeholder="Exempel: Fredagsrundan"
                 required
               />
             </label>
 
             <label className="field">
               Beskrivning
+
               <textarea
                 value={eventForm.description}
                 onChange={(event) =>
                   setEventForm({
                     ...eventForm,
-                    description: event.target.value,
+                    description:
+                      event.target.value,
                   })
                 }
+                placeholder="Valfri information om eventet"
               />
             </label>
 
             <label className="field">
               Aktivitet
+
               <select
                 value={eventForm.activityType}
                 onChange={(event) =>
                   setEventForm({
                     ...eventForm,
-                    activityType: event.target.value,
+                    activityType:
+                      event.target.value,
                   })
                 }
               >
-                <option>Promenad</option>
-                <option>Löpning</option>
-                <option>Cykling</option>
+                {activityTypes.map((type) => (
+                  <option
+                    key={type.id}
+                    value={type.name}
+                  >
+                    {type.name}
+                  </option>
+                ))}
               </select>
             </label>
 
-            <div className="two-columns">
-              <label className="field">
-                Start
-                <input
-                  type="datetime-local"
-                  value={eventForm.startsAt}
-                  onChange={(event) =>
-                    setEventForm({
-                      ...eventForm,
-                      startsAt: event.target.value,
-                    })
-                  }
-                  required
-                />
-              </label>
-
-              <label className="field">
-                Slut
-                <input
-                  type="datetime-local"
-                  value={eventForm.endsAt}
-                  onChange={(event) =>
-                    setEventForm({
-                      ...eventForm,
-                      endsAt: event.target.value,
-                    })
-                  }
-                  required
-                />
-              </label>
-            </div>
-
             <label className="field">
-              Sista anmälningstid
+              Starttid
+
               <input
                 type="datetime-local"
-                value={eventForm.joinDeadline}
+                value={eventForm.startsAt}
                 onChange={(event) =>
                   setEventForm({
                     ...eventForm,
-                    joinDeadline: event.target.value,
+                    startsAt:
+                      event.target.value,
                   })
                 }
                 required
@@ -2089,19 +2515,25 @@ export default function App() {
 
             <label className="field">
               Mötesplats
+
               <input
                 value={eventForm.locationName}
                 onChange={(event) =>
                   setEventForm({
                     ...eventForm,
-                    locationName: event.target.value,
+                    locationName:
+                      event.target.value,
                   })
                 }
+                placeholder="Exempel: Lund C"
               />
             </label>
 
-            <button className="primary full" type="submit">
-              Skapa event
+            <button
+              className="primary full"
+              type="submit"
+            >
+              Skapa event och anmäl mig
             </button>
           </form>
         </div>
@@ -2130,19 +2562,15 @@ export default function App() {
         header {
           height: 68px;
           padding: 0 24px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
           position: sticky;
           top: 0;
           z-index: 30;
-          background: rgba(255, 255, 255, 0.94);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
           border-bottom: 1px solid #e2e8f0;
+          background: rgba(255, 255, 255, 0.94);
           backdrop-filter: blur(18px);
-        }
-
-        button {
-          font: inherit;
         }
 
         .logo {
@@ -2151,9 +2579,9 @@ export default function App() {
           display: flex;
           align-items: center;
           gap: 10px;
+          color: #0f172a;
           font-size: 22px;
           font-weight: 950;
-          color: #0f172a;
         }
 
         .logo > span {
@@ -2176,13 +2604,13 @@ export default function App() {
 
         nav button {
           border: 0;
-          background: transparent;
           padding: 9px 12px;
           display: flex;
           align-items: center;
           gap: 7px;
           border-radius: 10px;
           color: #64748b;
+          background: transparent;
           font-weight: 800;
         }
 
@@ -2197,8 +2625,8 @@ export default function App() {
           height: 42px;
           border: 0;
           border-radius: 50%;
-          background: #0f172a;
           color: white;
+          background: #0f172a;
           font-size: 11px;
           font-weight: 900;
         }
@@ -2237,8 +2665,8 @@ export default function App() {
 
         .card {
           padding: 24px;
-          background: white;
           border-radius: 26px;
+          background: white;
           box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05);
         }
 
@@ -2293,7 +2721,7 @@ export default function App() {
 
         .tracker-grid {
           display: grid;
-          grid-template-columns: 1fr 390px;
+          grid-template-columns: 1fr 400px;
           gap: 20px;
         }
 
@@ -2362,6 +2790,10 @@ export default function App() {
           background: #0f172a;
         }
 
+        .primary:disabled {
+          opacity: 0.55;
+        }
+
         .secondary {
           color: #0f172a;
           background: #f1f5f9;
@@ -2413,21 +2845,21 @@ export default function App() {
           background: rgba(255, 255, 255, 0.9);
         }
 
-        .road-a {
+        .road-one {
           width: 92%;
           left: 8%;
           top: 25%;
           transform: rotate(14deg);
         }
 
-        .road-b {
+        .road-two {
           width: 115%;
           left: -8%;
           top: 67%;
           transform: rotate(-8deg);
         }
 
-        .road-c {
+        .road-three {
           width: 60%;
           left: 20%;
           top: 48%;
@@ -2467,12 +2899,12 @@ export default function App() {
 
         .activity-selector {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(2, 1fr);
           gap: 8px;
         }
 
         .activity-selector button {
-          min-height: 88px;
+          min-height: 78px;
           border: 1px solid #e2e8f0;
           border-radius: 15px;
           background: white;
@@ -2480,7 +2912,7 @@ export default function App() {
           flex-direction: column;
           justify-content: center;
           align-items: center;
-          gap: 8px;
+          gap: 7px;
           font-weight: 900;
         }
 
@@ -2508,8 +2940,8 @@ export default function App() {
           border-radius: 12px;
           padding: 12px;
           outline: 0;
-          background: white;
           color: #0f172a;
+          background: white;
         }
 
         textarea {
@@ -2598,15 +3030,18 @@ export default function App() {
           background: #ecfdf5;
         }
 
-        .status,
-        .event-type {
+        .pill {
           padding: 5px 9px;
           border-radius: 999px;
           color: #047857;
           background: #ecfdf5;
           font-size: 10px;
           font-weight: 900;
-          text-transform: uppercase;
+        }
+
+        .pill.started {
+          color: #475569;
+          background: #f1f5f9;
         }
 
         .event-details {
@@ -2624,7 +3059,6 @@ export default function App() {
         }
 
         .joined,
-        .created-by-me,
         .closed {
           margin-top: 17px;
           padding: 11px;
@@ -2641,11 +3075,6 @@ export default function App() {
           gap: 7px;
           color: #047857;
           background: #ecfdf5;
-        }
-
-        .created-by-me {
-          color: #1d4ed8;
-          background: #eff6ff;
         }
 
         .closed {
@@ -2682,27 +3111,22 @@ export default function App() {
           gap: 8px;
         }
 
-        .event-row,
-        .mini-post {
+        .mini-row {
           padding: 13px 0;
           display: flex;
           align-items: center;
           justify-content: space-between;
+          gap: 12px;
           border-bottom: 1px solid #f1f5f9;
         }
 
-        .event-row > div,
-        .mini-post {
+        .mini-row > div {
           display: flex;
+          flex-direction: column;
           gap: 4px;
         }
 
-        .event-row > div {
-          flex-direction: column;
-        }
-
-        .event-row span,
-        .mini-post span {
+        .mini-row span {
           color: #64748b;
           font-size: 12px;
         }
@@ -2779,6 +3203,10 @@ export default function App() {
           font-weight: 800;
         }
 
+        .post-actions button.liked {
+          color: #e11d48;
+        }
+
         .profile-card {
           text-align: center;
         }
@@ -2797,8 +3225,8 @@ export default function App() {
           border-bottom: 1px solid #f1f5f9;
           background: transparent;
           display: flex;
-          justify-content: space-between;
           align-items: center;
+          justify-content: space-between;
           font-weight: 800;
         }
 
@@ -2847,7 +3275,7 @@ export default function App() {
         }
 
         .empty {
-          min-height: 180px;
+          min-height: 155px;
           display: flex;
           flex-direction: column;
           justify-content: center;
@@ -2855,10 +3283,6 @@ export default function App() {
           gap: 9px;
           text-align: center;
           color: #94a3b8;
-        }
-
-        .small-empty {
-          min-height: 130px;
         }
 
         .empty strong {
@@ -2872,9 +3296,9 @@ export default function App() {
           padding: 18px;
           display: grid;
           place-items: center;
+          overflow-y: auto;
           background: rgba(15, 23, 42, 0.58);
           backdrop-filter: blur(5px);
-          overflow-y: auto;
         }
 
         .modal {
@@ -2942,12 +3366,6 @@ export default function App() {
           margin-top: 20px;
         }
 
-        .two-columns {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-        }
-
         .toast {
           max-width: calc(100vw - 30px);
           position: fixed;
@@ -2999,7 +3417,8 @@ export default function App() {
             bottom: 0;
             display: flex;
             justify-content: space-around;
-            padding: 8px 2px calc(8px + env(safe-area-inset-bottom));
+            padding: 8px 2px
+              calc(8px + env(safe-area-inset-bottom));
             border-top: 1px solid #e2e8f0;
             background: rgba(255, 255, 255, 0.96);
             backdrop-filter: blur(16px);
@@ -3056,7 +3475,7 @@ export default function App() {
           }
 
           .activity-selector {
-            grid-template-columns: 1fr;
+            grid-template-columns: 1fr 1fr;
           }
 
           .tracker-metrics {
@@ -3068,7 +3487,7 @@ export default function App() {
           }
 
           .metric strong {
-            font-size: 15px;
+            font-size: 14px;
           }
 
           .map {
@@ -3079,7 +3498,6 @@ export default function App() {
             font-size: 38px;
           }
 
-          .two-columns,
           .modal-actions {
             grid-template-columns: 1fr;
           }
