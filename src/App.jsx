@@ -2156,47 +2156,33 @@ export default function App() {
                   </select>
                 </label>
 
-                <div className="setting-list">
-                  {[
-                    [
-                      "voice_total_time",
-                      "Total tid",
-                    ],
-                    [
-                      "voice_split_time",
-                      "Senaste kilometertid",
-                    ],
-                    [
-                      "voice_average_pace",
-                      "Genomsnittstempo",
-                    ],
-                    [
-                      "voice_speed",
-                      "Hastighet vid cykling",
-                    ],
-                  ].map(([key, label]) => (
-                    <button
-                      key={key}
-                      onClick={() =>
-                        saveVoiceSettings({
-                          !settings?.[key],
-                        })
-                      }
-                    >
-                      <span>{label}</span>
+               <div className="setting-list">
+  {[
+    ["voice_total_time", "Total tid"],
+    ["voice_split_time", "Senaste kilometertid"],
+    ["voice_average_pace", "Genomsnittstempo"],
+    ["voice_speed", "Hastighet vid cykling"],
+  ].map(([key, label]) => (
+    <button
+      key={key}
+      onClick={() =>
+        saveVoiceSettings({
+          [key]: !settings?.[key],
+        })
+      }
+    >
+      <span>{label}</span>
 
-                      <span
-                        className={`switch ${
-                          settings?.[key]
-                            ? "on"
-                            : ""
-                        }`}
-                      >
-                        <i />
-                      </span>
-                    </button>
-                  ))}
-                </div>
+      <span
+        className={`switch ${
+          settings?.[key] ? "on" : ""
+        }`}
+      >
+        <i />
+      </span>
+    </button>
+  ))}
+</div>
 
                 <button
                   className="secondary full"
