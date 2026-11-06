@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react"; 
 import {
   Activity, BarChart3, Bell, Bike, CalendarDays, Check, CheckCircle2, Clock, Footprints,
   Heart, Home, LogOut, MapPin, MessageCircle, Mic, MicOff, Pause, Play,
