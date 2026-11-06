@@ -2,6 +2,7 @@ name: Build Pulsly Android APK
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - main
@@ -80,17 +81,23 @@ jobs:
       - name: Sync Capacitor Android
         run: bunx cap sync android
 
-        - name: Set Android minimum SDK to 26
+      - name: Set Android minimum SDK to 26
         shell: bash
         run: |
           echo "Setting Pulsly minSdkVersion to 26"
 
-          if [ -f "android/variables.gradle" ]; then
-            sed -i 's/minSdkVersion = 23/minSdkVersion = 26/g' android/variables.gradle
+          if [ ! -f "android/variables.gradle" ]; then
+            echo "ERROR: android/variables.gradle was not generated."
+            exit 1
           fi
 
-          echo "Current Android SDK settings:"
+          sed -i -E 's/minSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/minSdkVersion = 26/' android/variables.gradle
+
+          echo "Current Android SDK configuration:"
           cat android/variables.gradle
+
+          echo "Checking minSdkVersion:"
+          grep "minSdkVersion" android/variables.gradle
 
       - name: Show Capacitor configuration
         run: bunx cap doctor android
