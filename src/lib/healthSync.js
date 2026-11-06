@@ -181,8 +181,57 @@ export async function requestHealthAccess() {
 }
 
 export async function openNativeHealthSettings() {
-  if (Capacitor.getPlatform() === "android") {
-    await Health.openHealthConnectSettings();
+  if (!Capacitor.isNativePlatform()) {
+    return {
+      opened: false,
+      message: "Health-inställningar kan bara hanteras i Pulslys mobilapp.",
+    };
+  }
+
+  const platform = Capacitor.getPlatform();
+
+  if (platform !== "android") {
+    return {
+      opened: false,
+      message: "Hantera Health-behörigheter i telefonens Inställningar.",
+    };
+  }
+
+  // Version 7.2.15 av @capgo/capacitor-health kan sakna den native
+  // Android-implementation som öppnar Health Connect-inställningarna.
+  // Försök först öppna inställningarna. Om metoden saknas öppnar vi i
+  // stället pluginens behörighetsdialog, utan att visa ett rått native-fel.
+  try {
+    if (typeof Health.openHealthConnectSettings === "function") {
+      await Health.openHealthConnectSettings();
+      return { opened: true, method: "settings" };
+    }
+  } catch (error) {
+    const message = String(error?.message || error || "").toLowerCase();
+    const notImplemented =
+      message.includes("not implemented") ||
+      message.includes("unimplemented") ||
+      message.includes("not available");
+
+    if (!notImplemented) {
+      console.warn("Pulsly kunde inte öppna Health Connect-inställningarna:", error);
+    }
+  }
+
+  try {
+    await requestHealthAccess();
+    return {
+      opened: true,
+      method: "authorization",
+      message: "Health Connect-behörigheterna har öppnats eller kontrollerats.",
+    };
+  } catch (error) {
+    console.warn("Pulsly kunde inte öppna Health Connect-behörigheter:", error);
+    return {
+      opened: false,
+      message:
+        "Öppna Health Connect på telefonen och välj Appbehörigheter → Pulsly för att ändra behörigheter.",
+    };
   }
 }
 
@@ -270,7 +319,6 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       if (error) throw error;
     }
 
-    // Hitta korsleverantörsdubletter innan passiv bonus räknas.
     const { error: duplicateError } = await supabase.rpc(
       "find_my_health_workout_duplicates"
     );
@@ -304,8 +352,6 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       importedHeartSamples += data?.length || 0;
     }
 
-    // VO2 max är frivilligt. Om plattformen/pluginversionen inte exponerar
-    // datatypen returnerar safeRead bara en tom lista.
     const vo2Samples = await safeRead("vo2Max", firstDay, now, 1000);
     const vo2Rows = vo2Samples
       .map((sample) => ({
