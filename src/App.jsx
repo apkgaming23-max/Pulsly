@@ -6,9 +6,10 @@ import {
   CheckCircle2,
   Flame,
   Footprints,
-  Heart,
   Home,
+  LogOut,
   MapPin,
+  Medal,
   Pause,
   Play,
   RefreshCw,
@@ -22,6 +23,9 @@ import {
   Watch,
   Zap,
 } from "lucide-react";
+
+import Auth from "./Auth";
+import { supabase } from "./lib/supabase";
 
 const activityTypes = [
   {
@@ -51,9 +55,9 @@ const activityTypes = [
   },
 ];
 
-const startingActivities = [
+const demoActivities = [
   {
-    id: 1,
+    id: "demo-1",
     name: "Promenad",
     minutes: 42,
     distance: 4.2,
@@ -62,9 +66,10 @@ const startingActivities = [
     source: "Apple Hälsa",
     verified: true,
     group: false,
+    demo: true,
   },
   {
-    id: 2,
+    id: "demo-2",
     name: "Gemensam löprunda",
     minutes: 28,
     distance: 4.8,
@@ -73,21 +78,11 @@ const startingActivities = [
     source: "GPS",
     verified: true,
     group: true,
-  },
-  {
-    id: 3,
-    name: "Styrketräning",
-    minutes: 35,
-    distance: 0,
-    steps: 0,
-    points: 420,
-    source: "Garmin",
-    verified: true,
-    group: false,
+    demo: true,
   },
 ];
 
-const ranking = [
+const demoRanking = [
   ["Sara Lind", "Produktion", 18420],
   ["Nermin Culum", "Broms & Hydraulik", 17690],
   ["Johan Berg", "Logistik", 16980],
@@ -98,11 +93,17 @@ const ranking = [
 function haversine(a, b) {
   const radius = 6371;
 
-  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
-  const dLon = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const dLat =
+    ((b.latitude - a.latitude) * Math.PI) / 180;
 
-  const lat1 = (a.latitude * Math.PI) / 180;
-  const lat2 = (b.latitude * Math.PI) / 180;
+  const dLon =
+    ((b.longitude - a.longitude) * Math.PI) / 180;
+
+  const lat1 =
+    (a.latitude * Math.PI) / 180;
+
+  const lat2 =
+    (b.latitude * Math.PI) / 180;
 
   const value =
     Math.sin(dLat / 2) ** 2 +
@@ -113,43 +114,72 @@ function haversine(a, b) {
   return (
     radius *
     2 *
-    Math.atan2(Math.sqrt(value), Math.sqrt(1 - value))
+    Math.atan2(
+      Math.sqrt(value),
+      Math.sqrt(1 - value)
+    )
   );
 }
 
 function formatTime(seconds) {
-  const hours = String(Math.floor(seconds / 3600)).padStart(2, "0");
+  const hours = String(
+    Math.floor(seconds / 3600)
+  ).padStart(2, "0");
 
   const minutes = String(
     Math.floor((seconds % 3600) / 60)
   ).padStart(2, "0");
 
-  const secs = String(seconds % 60).padStart(2, "0");
+  const secs = String(
+    seconds % 60
+  ).padStart(2, "0");
 
   return `${hours}:${minutes}:${secs}`;
 }
 
-function Card({ children, className = "" }) {
+function initials(name) {
+  if (!name) return "PU";
+
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+}
+
+function Card({
+  children,
+  className = "",
+}) {
   return (
-    <div
-      className={`card ${className}`}
-    >
+    <div className={`card ${className}`}>
       {children}
     </div>
   );
 }
 
-function Metric({ icon: Icon, value, label }) {
+function Metric({
+  icon: Icon,
+  value,
+  label,
+}) {
   return (
     <div className="metric">
       <Icon size={20} />
+
       <strong>{value}</strong>
+
       <span>{label}</span>
     </div>
   );
 }
 
-function MapView({ positions, tracking }) {
+function MapView({
+  positions,
+  tracking,
+}) {
   return (
     <div className="map">
       <div className="map-grid" />
@@ -184,7 +214,11 @@ function MapView({ positions, tracking }) {
           cx="520"
           cy="70"
           r="12"
-          fill={tracking ? "#10b981" : "#0f172a"}
+          fill={
+            tracking
+              ? "#10b981"
+              : "#0f172a"
+          }
           stroke="white"
           strokeWidth="5"
         />
@@ -206,10 +240,23 @@ function MapView({ positions, tracking }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState("home");
+  const [session, setSession] =
+    useState(null);
+
+  const [profile, setProfile] =
+    useState(null);
+
+  const [authLoading, setAuthLoading] =
+    useState(true);
+
+  const [page, setPage] =
+    useState("home");
 
   const [activities, setActivities] =
-    useState(startingActivities);
+    useState([]);
+
+  const [activitiesLoading, setActivitiesLoading] =
+    useState(false);
 
   const [activityType, setActivityType] =
     useState(activityTypes[0]);
@@ -235,54 +282,310 @@ export default function App() {
   const [message, setMessage] =
     useState("");
 
+  const [errorMessage, setErrorMessage] =
+    useState("");
+
   const watchId = useRef(null);
   const lastPosition = useRef(null);
 
-  const steps = 8660;
+  const fullName =
+    profile?.full_name ||
+    session?.user?.user_metadata?.full_name ||
+    session?.user?.email ||
+    "Pulsly-användare";
+
+  const firstName =
+    fullName.includes("@")
+      ? "där"
+      : fullName.split(" ")[0];
+
+  const activityList =
+    activities.length > 0
+      ? activities
+      : demoActivities;
 
   const todayPoints = useMemo(
     () =>
-      activities.reduce(
+      activityList.reduce(
         (total, activity) =>
-          total + activity.points,
+          total +
+          Number(activity.points || 0),
         0
       ),
-    [activities]
+    [activityList]
+  );
+
+  const todaySteps = useMemo(
+    () =>
+      activityList.reduce(
+        (total, activity) =>
+          total +
+          Number(activity.steps || 0),
+        0
+      ),
+    [activityList]
+  );
+
+  const todayMinutes = useMemo(
+    () =>
+      activityList.reduce(
+        (total, activity) =>
+          total +
+          Number(activity.minutes || 0),
+        0
+      ),
+    [activityList]
+  );
+
+  const todayDistance = useMemo(
+    () =>
+      activityList.reduce(
+        (total, activity) =>
+          total +
+          Number(activity.distance || 0),
+        0
+      ),
+    [activityList]
   );
 
   const multiplier =
     activityType.multiplier || 1;
 
-  const currentPoints = Math.floor(
-    (seconds / 60) *
-      activityType.pointsPerMinute *
-      multiplier
-  );
+  const currentPoints =
+    Math.floor(
+      (seconds / 60) *
+        activityType.pointsPerMinute *
+        multiplier
+    );
 
   useEffect(() => {
-    if (!tracking || paused) return;
+    let mounted = true;
 
-    const timer = setInterval(() => {
-      setSeconds((value) => value + 1);
-    }, 1000);
+    async function initialiseAuth() {
+      try {
+        const {
+          data: { session: currentSession },
+        } =
+          await supabase.auth.getSession();
 
-    return () => clearInterval(timer);
+        if (!mounted) return;
+
+        setSession(currentSession);
+
+        if (currentSession?.user) {
+          await loadProfile(
+            currentSession.user.id
+          );
+
+          await loadActivities(
+            currentSession.user.id
+          );
+        }
+      } catch (error) {
+        console.error(error);
+      } finally {
+        if (mounted) {
+          setAuthLoading(false);
+        }
+      }
+    }
+
+    initialiseAuth();
+
+    const {
+      data: { subscription },
+    } =
+      supabase.auth.onAuthStateChange(
+        async (
+          event,
+          nextSession
+        ) => {
+          if (
+            event ===
+            "PASSWORD_RECOVERY"
+          ) {
+            return;
+          }
+
+          setSession(nextSession);
+
+          if (nextSession?.user) {
+            await loadProfile(
+              nextSession.user.id
+            );
+
+            await loadActivities(
+              nextSession.user.id
+            );
+          } else {
+            setProfile(null);
+            setActivities([]);
+          }
+
+          setAuthLoading(false);
+        }
+      );
+
+    return () => {
+      mounted = false;
+
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!tracking || paused) {
+      return;
+    }
+
+    const timer =
+      window.setInterval(() => {
+        setSeconds(
+          (value) => value + 1
+        );
+      }, 1000);
+
+    return () =>
+      window.clearInterval(timer);
   }, [tracking, paused]);
 
   useEffect(() => {
     return () => {
-      if (
-        watchId.current !== null &&
-        navigator.geolocation
-      ) {
-        navigator.geolocation.clearWatch(
-          watchId.current
-        );
-      }
+      stopGpsWatcher();
     };
   }, []);
 
+  async function loadProfile(userId) {
+    const { data, error } =
+      await supabase
+        .from("profiles")
+        .select(
+          "id, full_name, avatar_url, department, location, role"
+        )
+        .eq("id", userId)
+        .maybeSingle();
+
+    if (error) {
+      console.error(
+        "Kunde inte läsa profil:",
+        error
+      );
+
+      return;
+    }
+
+    if (data) {
+      setProfile(data);
+    }
+  }
+
+  async function loadActivities(
+    userId
+  ) {
+    setActivitiesLoading(true);
+
+    try {
+      const { data, error } =
+        await supabase
+          .from("activities")
+          .select("*")
+          .eq("user_id", userId)
+          .order(
+            "started_at",
+            {
+              ascending: false,
+            }
+          )
+          .limit(100);
+
+      if (error) {
+        throw error;
+      }
+
+      const mapped = (data || []).map(
+        (activity) => ({
+          id: activity.id,
+          name:
+            activity.activity_type,
+          minutes: Math.round(
+            Number(
+              activity.duration_seconds ||
+                0
+            ) / 60
+          ),
+          distance:
+            Number(
+              activity.distance_meters ||
+                0
+            ) / 1000,
+          steps:
+            Number(
+              activity.steps || 0
+            ),
+          points:
+            Number(
+              activity.points || 0
+            ),
+          source:
+            activity.verification_source ||
+            activity.source ||
+            "Pulsly",
+          verified:
+            activity.verified,
+          group:
+            activity.is_group_activity,
+        })
+      );
+
+      setActivities(mapped);
+    } catch (error) {
+      console.error(
+        "Kunde inte läsa aktiviteter:",
+        error
+      );
+    } finally {
+      setActivitiesLoading(false);
+    }
+  }
+
+  function notify(text) {
+    setMessage(text);
+
+    window.setTimeout(() => {
+      setMessage("");
+    }, 3500);
+  }
+
+  function notifyError(text) {
+    setErrorMessage(text);
+
+    window.setTimeout(() => {
+      setErrorMessage("");
+    }, 5000);
+  }
+
+  function stopGpsWatcher() {
+    if (
+      watchId.current !== null &&
+      navigator.geolocation
+    ) {
+      navigator.geolocation.clearWatch(
+        watchId.current
+      );
+
+      watchId.current = null;
+    }
+  }
+
   function startTracking() {
+    if (!navigator.geolocation) {
+      notifyError(
+        "GPS stöds inte av den här webbläsaren."
+      );
+
+      return;
+    }
+
     setTracking(true);
     setPaused(false);
     setSeconds(0);
@@ -291,47 +594,54 @@ export default function App() {
 
     lastPosition.current = null;
 
-    if (!navigator.geolocation) {
-      setMessage(
-        "Telefonen stödjer inte GPS via webbläsaren."
-      );
-
-      return;
-    }
-
     watchId.current =
       navigator.geolocation.watchPosition(
         ({ coords }) => {
           const point = {
-            latitude: coords.latitude,
-            longitude: coords.longitude,
-            accuracy: coords.accuracy,
+            latitude:
+              coords.latitude,
+            longitude:
+              coords.longitude,
+            accuracy:
+              coords.accuracy,
           };
 
           if (
             lastPosition.current &&
             coords.accuracy < 80
           ) {
-            const segment = haversine(
-              lastPosition.current,
-              point
-            );
+            const segment =
+              haversine(
+                lastPosition.current,
+                point
+              );
 
-            setDistance(
-              (current) =>
-                current + segment
-            );
+            if (
+              segment > 0 &&
+              segment < 0.5
+            ) {
+              setDistance(
+                (current) =>
+                  current +
+                  segment
+              );
+            }
           }
 
-          lastPosition.current = point;
+          lastPosition.current =
+            point;
 
-          setPositions((current) => [
-            ...current,
-            point,
-          ]);
+          setPositions(
+            (current) => [
+              ...current,
+              point,
+            ]
+          );
         },
-        () => {
-          setMessage(
+        (error) => {
+          console.error(error);
+
+          notifyError(
             "GPS kunde inte startas. Tillåt exakt plats för Pulsly."
           );
         },
@@ -343,97 +653,278 @@ export default function App() {
       );
   }
 
-  function finishActivity() {
-    if (
-      watchId.current !== null &&
-      navigator.geolocation
-    ) {
-      navigator.geolocation.clearWatch(
-        watchId.current
+  async function finishActivity() {
+    stopGpsWatcher();
+
+    const endedAt =
+      new Date();
+
+    const startedAt =
+      new Date(
+        endedAt.getTime() -
+          seconds * 1000
       );
+
+    const minutes =
+      Math.max(
+        1,
+        Math.round(seconds / 60)
+      );
+
+    const basePoints =
+      minutes *
+      activityType.pointsPerMinute;
+
+    const isGroup =
+      activityType.multiplier ===
+      1.5;
+
+    const finalMultiplier =
+      isGroup ? 1.5 : 1;
+
+    try {
+      const {
+        data: createdActivity,
+        error,
+      } =
+        await supabase
+          .from("activities")
+          .insert({
+            user_id:
+              session.user.id,
+
+            activity_type:
+              activityType.name,
+
+            source: "gps",
+
+            started_at:
+              startedAt.toISOString(),
+
+            ended_at:
+              endedAt.toISOString(),
+
+            duration_seconds:
+              Math.max(seconds, 60),
+
+            distance_meters:
+              Math.round(
+                distance * 1000
+              ),
+
+            steps: 0,
+
+            base_points:
+              basePoints,
+
+            multiplier:
+              finalMultiplier,
+
+            is_group_activity:
+              isGroup,
+
+            verified:
+              positions.length > 0,
+
+            verification_source:
+              "GPS",
+          })
+          .select()
+          .single();
+
+      if (error) {
+        throw error;
+      }
+
+      if (
+        createdActivity &&
+        positions.length > 0
+      ) {
+        const routeRows =
+          positions.map(
+            (point) => ({
+              activity_id:
+                createdActivity.id,
+
+              user_id:
+                session.user.id,
+
+              latitude:
+                point.latitude,
+
+              longitude:
+                point.longitude,
+
+              accuracy_meters:
+                point.accuracy,
+            })
+          );
+
+        const { error: routeError } =
+          await supabase
+            .from(
+              "activity_routes"
+            )
+            .insert(routeRows);
+
+        if (routeError) {
+          console.error(
+            "Rutten kunde inte sparas:",
+            routeError
+          );
+        }
+      }
+
+      await loadActivities(
+        session.user.id
+      );
+
+      notify(
+        `Aktiviteten sparades. +${Math.round(
+          basePoints *
+            finalMultiplier
+        )} poäng`
+      );
+    } catch (error) {
+      console.error(error);
+
+      notifyError(
+        `Aktiviteten kunde inte sparas: ${
+          error.message ||
+          "Okänt fel"
+        }`
+      );
+    } finally {
+      setTracking(false);
+      setPaused(false);
+      setSeconds(0);
+      setDistance(0);
+      setPositions([]);
+      lastPosition.current =
+        null;
     }
+  }
 
-    const minutes = Math.max(
-      1,
-      Math.round(seconds / 60)
-    );
+  async function signOut() {
+    stopGpsWatcher();
 
-    const points = Math.max(
-      1,
-      Math.round(
-        minutes *
-          activityType.pointsPerMinute *
-          multiplier
-      )
-    );
+    await supabase.auth.signOut();
 
-    const newActivity = {
-      id: Date.now(),
-      name: activityType.name,
-      minutes,
-      distance:
-        Math.round(distance * 100) / 100,
-      steps: 0,
-      points,
-      source: "GPS",
-      verified: true,
-      group:
-        activityType.multiplier === 1.5,
-    };
-
-    setActivities((current) => [
-      newActivity,
-      ...current,
-    ]);
-
-    setTracking(false);
-    setPaused(false);
-
-    setMessage(
-      `Aktiviteten verifierades. +${points} poäng`
-    );
+    setSession(null);
+    setProfile(null);
+    setActivities([]);
+    setPage("home");
   }
 
   function syncHealth() {
     setSyncing(true);
 
-    setTimeout(() => {
+    window.setTimeout(() => {
       setSyncing(false);
 
-      setMessage(
-        "Hälsodata synkroniserad."
+      notify(
+        "Synkroniseringen är förberedd. Apple Health och Health Connect kopplas in i mobilversionen."
       );
-    }, 1200);
+    }, 1000);
   }
 
   const navigation = [
     ["home", "Hem", Home],
     ["track", "Spåra", MapPin],
-    ["challenges", "Utmaningar", Trophy],
-    ["ranking", "Topplista", BarChart3],
+    [
+      "challenges",
+      "Utmaningar",
+      Trophy,
+    ],
+    [
+      "ranking",
+      "Topplista",
+      BarChart3,
+    ],
     ["profile", "Profil", User],
   ];
+
+  if (authLoading) {
+    return (
+      <div className="loading-page">
+        <div className="loading-logo">
+          <Activity size={34} />
+        </div>
+
+        <h2>Laddar Pulsly...</h2>
+
+        <style>{`
+          .loading-page {
+            min-height: 100vh;
+            display: grid;
+            place-content: center;
+            text-align: center;
+            background: #eff5f2;
+            color: #0f172a;
+          }
+
+          .loading-logo {
+            width: 65px;
+            height: 65px;
+            margin: 0 auto 12px;
+            display: grid;
+            place-items: center;
+            border-radius: 20px;
+            color: white;
+            background: linear-gradient(
+              135deg,
+              #10b981,
+              #14b8a6
+            );
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Auth />;
+  }
 
   return (
     <div className="app">
       {message && (
         <div
-          className="toast"
-          onClick={() => setMessage("")}
+          className="toast success-toast"
+          onClick={() =>
+            setMessage("")
+          }
         >
-          <CheckCircle2 size={18} />
+          <CheckCircle2
+            size={18}
+          />
 
           {message}
+        </div>
+      )}
+
+      {errorMessage && (
+        <div
+          className="toast error-toast"
+          onClick={() =>
+            setErrorMessage("")
+          }
+        >
+          {errorMessage}
         </div>
       )}
 
       <header>
         <button
           className="logo"
-          onClick={() => setPage("home")}
+          onClick={() =>
+            setPage("home")
+          }
         >
           <span className="logo-icon">
-            <Activity size={23} />
+            <Activity
+              size={23}
+            />
           </span>
 
           Pulsly
@@ -441,7 +932,11 @@ export default function App() {
 
         <nav>
           {navigation.map(
-            ([id, label, Icon]) => (
+            ([
+              id,
+              label,
+              Icon,
+            ]) => (
               <button
                 key={id}
                 className={
@@ -449,9 +944,12 @@ export default function App() {
                     ? "nav-active"
                     : ""
                 }
-                onClick={() => setPage(id)}
+                onClick={() =>
+                  setPage(id)
+                }
               >
                 <Icon size={17} />
+
                 {label}
               </button>
             )
@@ -463,8 +961,9 @@ export default function App() {
           onClick={() =>
             setPage("profile")
           }
+          title={fullName}
         >
-          NC
+          {initials(fullName)}
         </button>
       </header>
 
@@ -474,14 +973,17 @@ export default function App() {
             <section className="page-title">
               <div>
                 <span className="eyebrow">
-                  TORSDAG 5 NOVEMBER
+                  PULSLY
                 </span>
 
-                <h1>Hej Nermin! 👋</h1>
+                <h1>
+                  Hej {firstName}! 👋
+                </h1>
 
                 <p>
-                  Ingen daglig poänggräns.
-                  All verifierad aktivitet
+                  Ingen daglig
+                  poänggräns. All
+                  verifierad aktivitet
                   räknas.
                 </p>
               </div>
@@ -493,41 +995,58 @@ export default function App() {
                 }
               >
                 <Play size={18} />
+
                 Starta aktivitet
               </button>
             </section>
 
             <Card className="health-card">
-              <div>
-                <div className="verified">
-                  <ShieldCheck size={18} />
+              <div className="health-intro">
+                <div>
+                  <div className="verified">
+                    <ShieldCheck
+                      size={18}
+                    />
 
-                  Verifierad via hälsodata
+                    Verifierad
+                    hälsodata
+                  </div>
+
+                  <div className="step-number">
+                    {todaySteps.toLocaleString(
+                      "sv-SE"
+                    )}{" "}
+                    steg
+                  </div>
+
+                  <p>
+                    All aktivitet under
+                    dagen samlas i
+                    Pulsly.
+                  </p>
                 </div>
 
-                <div className="step-number">
-                  {steps.toLocaleString(
-                    "sv-SE"
-                  )}{" "}
-                  steg
-                </div>
-
-                <p>
-                  Synkas automatiskt under
-                  dagen
-                </p>
+                {activities.length ===
+                  0 && (
+                  <span className="demo-label">
+                    Demodata tills första
+                    aktiviteten sparas
+                  </span>
+                )}
               </div>
 
               <div className="metrics">
                 <Metric
                   icon={Flame}
-                  value="70 min"
+                  value={`${todayMinutes} min`}
                   label="Aktiv tid"
                 />
 
                 <Metric
                   icon={Route}
-                  value="6,2 km"
+                  value={`${todayDistance.toFixed(
+                    1
+                  )} km`}
                   label="Distans"
                 />
 
@@ -542,17 +1061,31 @@ export default function App() {
 
               <div className="connections">
                 <span>
-                  <Smartphone size={16} />
-                  Apple Hälsa
+                  <Smartphone
+                    size={16}
+                  />
+
+                  Apple Health
+                </span>
+
+                <span>
+                  <Activity
+                    size={16}
+                  />
+
+                  Health Connect
                 </span>
 
                 <span>
                   <Watch size={16} />
-                  Bakgrundssynk
+
+                  Garmin
                 </span>
 
                 <button
-                  onClick={syncHealth}
+                  onClick={
+                    syncHealth
+                  }
                 >
                   <RefreshCw
                     size={16}
@@ -577,9 +1110,10 @@ export default function App() {
                 </h2>
 
                 <p>
-                  GPS och hälsodata
-                  bekräftar att aktiviteten
-                  faktiskt genomförs.
+                  Starta en aktivitet så
+                  använder Pulsly GPS,
+                  tid och rörelsedata för
+                  verifiering.
                 </p>
 
                 <MapView
@@ -594,6 +1128,7 @@ export default function App() {
                   }
                 >
                   <Play size={18} />
+
                   Starta spårning
                 </button>
               </Card>
@@ -603,50 +1138,62 @@ export default function App() {
                   Senaste aktiviteter
                 </h2>
 
-                <div className="activity-list">
-                  {activities
-                    .slice(0, 5)
-                    .map((activity) => (
-                      <div
-                        className="activity-row"
-                        key={activity.id}
-                      >
-                        <div>
-                          <strong>
-                            {activity.name}
-                          </strong>
+                {activitiesLoading ? (
+                  <p>
+                    Läser aktiviteter...
+                  </p>
+                ) : (
+                  <div className="activity-list">
+                    {activityList
+                      .slice(0, 6)
+                      .map(
+                        (activity) => (
+                          <div
+                            className="activity-row"
+                            key={
+                              activity.id
+                            }
+                          >
+                            <div>
+                              <strong>
+                                {
+                                  activity.name
+                                }
+                              </strong>
 
-                          {activity.group && (
-                            <span className="multiplier">
-                              1,5×
-                            </span>
-                          )}
+                              {activity.group && (
+                                <span className="multiplier">
+                                  1,5×
+                                </span>
+                              )}
 
-                          <small>
-                            <ShieldCheck
-                              size={13}
-                            />
+                              <small>
+                                <ShieldCheck
+                                  size={13}
+                                />
 
-                            {
-                              activity.source
-                            }{" "}
-                            ·{" "}
-                            {
-                              activity.minutes
-                            }{" "}
-                            min
-                          </small>
-                        </div>
+                                {
+                                  activity.source
+                                }{" "}
+                                ·{" "}
+                                {
+                                  activity.minutes
+                                }{" "}
+                                min
+                              </small>
+                            </div>
 
-                        <b>
-                          +
-                          {
-                            activity.points
-                          }
-                        </b>
-                      </div>
-                    ))}
-                </div>
+                            <b>
+                              +
+                              {
+                                activity.points
+                              }
+                            </b>
+                          </div>
+                        )
+                      )}
+                  </div>
+                )}
               </Card>
             </div>
           </>
@@ -666,8 +1213,8 @@ export default function App() {
 
                 <p>
                   GPS, aktivitetstid och
-                  hälsodata används för
-                  verifieringen.
+                  rörelsedata verifierar
+                  aktiviteten.
                 </p>
               </div>
             </section>
@@ -675,9 +1222,12 @@ export default function App() {
             <div className="tracker-grid">
               <Card>
                 <MapView
-                  positions={positions}
+                  positions={
+                    positions
+                  }
                   tracking={
-                    tracking && !paused
+                    tracking &&
+                    !paused
                   }
                 />
               </Card>
@@ -695,8 +1245,12 @@ export default function App() {
 
                       return (
                         <button
-                          key={type.id}
-                          disabled={tracking}
+                          key={
+                            type.id
+                          }
+                          disabled={
+                            tracking
+                          }
                           className={
                             activityType.id ===
                             type.id
@@ -709,7 +1263,9 @@ export default function App() {
                             )
                           }
                         >
-                          <Icon size={21} />
+                          <Icon
+                            size={21}
+                          />
 
                           <span>
                             {type.name}
@@ -717,7 +1273,8 @@ export default function App() {
 
                           {type.multiplier && (
                             <small>
-                              1,5× poäng
+                              1,5×
+                              poäng
                             </small>
                           )}
                         </button>
@@ -727,7 +1284,9 @@ export default function App() {
                 </div>
 
                 <div className="timer">
-                  {formatTime(seconds)}
+                  {formatTime(
+                    seconds
+                  )}
 
                   <small>
                     Aktiv tid
@@ -748,12 +1307,14 @@ export default function App() {
                     value={
                       positions.length
                     }
-                    label="GPS-punkter"
+                    label="GPS"
                   />
 
                   <Metric
                     icon={Zap}
-                    value={currentPoints}
+                    value={
+                      currentPoints
+                    }
                     label="Poäng"
                   />
                 </div>
@@ -761,9 +1322,14 @@ export default function App() {
                 {!tracking ? (
                   <button
                     className="primary full"
-                    onClick={startTracking}
+                    onClick={
+                      startTracking
+                    }
                   >
-                    <Play size={19} />
+                    <Play
+                      size={19}
+                    />
+
                     Starta GPS
                   </button>
                 ) : (
@@ -778,7 +1344,9 @@ export default function App() {
                       }
                     >
                       {paused ? (
-                        <Play size={18} />
+                        <Play
+                          size={18}
+                        />
                       ) : (
                         <Pause
                           size={18}
@@ -796,7 +1364,10 @@ export default function App() {
                         finishActivity
                       }
                     >
-                      <Square size={17} />
+                      <Square
+                        size={17}
+                      />
+
                       Avsluta
                     </button>
                   </div>
@@ -808,12 +1379,27 @@ export default function App() {
                   Ingen daglig
                   poänggräns
                 </div>
+
+                {activityType.multiplier ===
+                  1.5 && (
+                  <div className="group-bonus">
+                    <Users
+                      size={18}
+                    />
+
+                    Gemensam aktivitet:
+                    alla intjänade poäng
+                    multipliceras med
+                    1,5.
+                  </div>
+                )}
               </Card>
             </div>
           </>
         )}
 
-        {page === "challenges" && (
+        {page ===
+          "challenges" && (
           <>
             <section className="page-title">
               <div>
@@ -821,11 +1407,13 @@ export default function App() {
                   PULSLY TOGETHER
                 </span>
 
-                <h1>Utmaningar</h1>
+                <h1>
+                  Utmaningar
+                </h1>
 
                 <p>
-                  Gemensamma aktiviteter
-                  ger 1,5× poäng.
+                  Rörelse, lagarbete och
+                  gemensamma mål.
                 </p>
               </div>
             </section>
@@ -834,18 +1422,18 @@ export default function App() {
               {[
                 [
                   "Lund till München",
-                  "68%",
+                  68,
                   "Gemensam stegresa",
                 ],
                 [
                   "Aktiv lunch",
-                  "80%",
+                  80,
                   "20 min vardagsmotion",
                 ],
                 [
                   "Move Together",
-                  "42%",
-                  "Gemensamma aktiviteter",
+                  42,
+                  "Gemensamma aktiviteter ger 1,5× poäng",
                 ],
               ].map(
                 ([
@@ -855,11 +1443,13 @@ export default function App() {
                 ]) => (
                   <Card key={title}>
                     <Trophy
-                      size={32}
+                      size={34}
                       className="challenge-icon"
                     />
 
-                    <h2>{title}</h2>
+                    <h2>
+                      {title}
+                    </h2>
 
                     <p>
                       {description}
@@ -868,13 +1458,13 @@ export default function App() {
                     <div className="progress">
                       <span
                         style={{
-                          width: progress,
+                          width: `${progress}%`,
                         }}
                       />
                     </div>
 
                     <strong>
-                      {progress} klart
+                      {progress}% klart
                     </strong>
                   </Card>
                 )
@@ -888,21 +1478,23 @@ export default function App() {
             <section className="page-title">
               <div>
                 <span className="eyebrow">
-                  NOVEMBER
+                  TOPPLISTA
                 </span>
 
-                <h1>Topplista</h1>
+                <h1>
+                  Mest aktiva
+                </h1>
 
                 <p>
-                  Alla verifierade poäng
-                  räknas.
+                  Verifierade poäng utan
+                  daglig maxgräns.
                 </p>
               </div>
             </section>
 
             <Card>
               <div className="ranking">
-                {ranking.map(
+                {demoRanking.map(
                   (
                     [
                       name,
@@ -913,25 +1505,22 @@ export default function App() {
                   ) => (
                     <div
                       key={name}
-                      className={
-                        name ===
-                        "Nermin Culum"
-                          ? "ranking-me"
-                          : ""
-                      }
                     >
                       <span className="rank">
-                        {index + 1}
+                        {index <
+                        3 ? (
+                          <Medal
+                            size={20}
+                          />
+                        ) : (
+                          index + 1
+                        )}
                       </span>
 
                       <span className="avatar">
-                        {name
-                          .split(" ")
-                          .map(
-                            (word) =>
-                              word[0]
-                          )
-                          .join("")}
+                        {initials(
+                          name
+                        )}
                       </span>
 
                       <span className="ranking-name">
@@ -954,6 +1543,13 @@ export default function App() {
                   )
                 )}
               </div>
+
+              <p className="demo-note">
+                Topplistan använder
+                demodata tills vi
+                bygger databasvyn för
+                ranking.
+              </p>
             </Card>
           </>
         )}
@@ -966,10 +1562,17 @@ export default function App() {
                   MIN PROFIL
                 </span>
 
-                <h1>Nermin Culum</h1>
+                <h1>
+                  {fullName}
+                </h1>
 
                 <p>
-                  Broms & Hydraulik · Lund
+                  {profile?.department ||
+                    "Pulsly-medlem"}
+
+                  {profile?.location
+                    ? ` · ${profile.location}`
+                    : ""}
                 </p>
               </div>
             </section>
@@ -977,30 +1580,47 @@ export default function App() {
             <div className="profile-grid">
               <Card className="profile-card">
                 <div className="large-avatar">
-                  NC
+                  {initials(
+                    fullName
+                  )}
                 </div>
 
                 <h2>
-                  Nermin Culum
+                  {fullName}
                 </h2>
 
                 <p>
-                  Broms & Hydraulik
+                  {session.user.email}
                 </p>
 
                 <div className="profile-stats">
                   <Metric
                     icon={Footprints}
-                    value="142 680"
-                    label="Steg denna månad"
+                    value={todaySteps.toLocaleString(
+                      "sv-SE"
+                    )}
+                    label="Steg"
                   />
 
                   <Metric
-                    icon={Flame}
-                    value="1 890"
-                    label="Aktiva minuter"
+                    icon={Zap}
+                    value={todayPoints.toLocaleString(
+                      "sv-SE"
+                    )}
+                    label="Poäng"
                   />
                 </div>
+
+                <button
+                  className="logout-button"
+                  onClick={signOut}
+                >
+                  <LogOut
+                    size={18}
+                  />
+
+                  Logga ut
+                </button>
               </Card>
 
               <Card>
@@ -1013,16 +1633,14 @@ export default function App() {
 
                   <div>
                     <strong>
-                      Apple Hälsa
+                      Apple Health
                     </strong>
 
                     <small>
-                      Ansluten · automatisk
-                      synk
+                      Kommer kopplas via
+                      iOS-appen
                     </small>
                   </div>
-
-                  <CheckCircle2 />
                 </div>
 
                 <div className="health-service">
@@ -1030,12 +1648,12 @@ export default function App() {
 
                   <div>
                     <strong>
-                      Google Health
-                      Connect
+                      Health Connect
                     </strong>
 
                     <small>
-                      Android
+                      Kommer kopplas via
+                      Android-appen
                     </small>
                   </div>
                 </div>
@@ -1045,15 +1663,13 @@ export default function App() {
 
                   <div>
                     <strong>
-                      Garmin Connect
+                      Garmin
                     </strong>
 
                     <small>
-                      Träningsdata
+                      Planerad integration
                     </small>
                   </div>
-
-                  <CheckCircle2 />
                 </div>
 
                 <div className="privacy-box">
@@ -1065,12 +1681,13 @@ export default function App() {
                     </strong>
 
                     <p>
-                      Exakta GPS-rutter ska
-                      endast vara synliga
-                      för användaren.
-                      Topplistor använder
-                      verifierade poäng,
-                      inte platsdata.
+                      Exakta GPS-rutter
+                      ligger separat i
+                      databasen och ska
+                      endast vara
+                      tillgängliga för
+                      användaren som äger
+                      aktiviteten.
                     </p>
                   </div>
                 </div>
@@ -1082,7 +1699,11 @@ export default function App() {
 
       <div className="mobile-nav">
         {navigation.map(
-          ([id, label, Icon]) => (
+          ([
+            id,
+            label,
+            Icon,
+          ]) => (
             <button
               key={id}
               className={
@@ -1090,9 +1711,12 @@ export default function App() {
                   ? "nav-active"
                   : ""
               }
-              onClick={() => setPage(id)}
+              onClick={() =>
+                setPage(id)
+              }
             >
               <Icon size={20} />
+
               <span>{label}</span>
             </button>
           )
@@ -1103,6 +1727,7 @@ export default function App() {
         .app {
           min-height: 100vh;
           padding-bottom: 90px;
+          color: #0f172a;
         }
 
         header {
@@ -1165,18 +1790,15 @@ export default function App() {
           box-shadow: 0 1px 4px rgba(0,0,0,.07);
         }
 
-        .profile-button,
-        .avatar {
-          border: 0;
-          background: #0f172a;
-          color: white;
-          font-weight: 800;
-          border-radius: 50%;
-        }
-
         .profile-button {
           width: 42px;
           height: 42px;
+          border: 0;
+          border-radius: 50%;
+          background: #0f172a;
+          color: white;
+          font-size: 11px;
+          font-weight: 900;
         }
 
         main {
@@ -1222,6 +1844,12 @@ export default function App() {
           margin-bottom: 20px;
         }
 
+        .health-intro {
+          display: flex;
+          justify-content: space-between;
+          gap: 15px;
+        }
+
         .verified {
           color: #059669;
           font-size: 14px;
@@ -1229,6 +1857,16 @@ export default function App() {
           display: flex;
           align-items: center;
           gap: 7px;
+        }
+
+        .demo-label {
+          align-self: flex-start;
+          background: #fef3c7;
+          color: #92400e;
+          padding: 7px 10px;
+          border-radius: 10px;
+          font-size: 11px;
+          font-weight: 800;
         }
 
         .step-number {
@@ -1369,8 +2007,8 @@ export default function App() {
           left: 14px;
           top: 14px;
           display: flex;
-          align-items: center;
           gap: 5px;
+          align-items: center;
         }
 
         .position-label {
@@ -1380,7 +2018,8 @@ export default function App() {
 
         .primary,
         .secondary,
-        .danger {
+        .danger,
+        .logout-button {
           border: 0;
           padding: 12px 18px;
           border-radius: 12px;
@@ -1404,6 +2043,13 @@ export default function App() {
         .danger {
           background: #e11d48;
           color: white;
+        }
+
+        .logout-button {
+          width: 100%;
+          margin-top: 20px;
+          background: #fff1f2;
+          color: #be123c;
         }
 
         .full {
@@ -1490,19 +2136,27 @@ export default function App() {
           margin-top: 16px;
         }
 
-        .unlimited {
+        .unlimited,
+        .group-bonus {
           margin-top: 16px;
-          background: #f8fafc;
           padding: 12px;
           border-radius: 12px;
-          text-align: center;
-          font-size: 12px;
-          font-weight: 800;
-          color: #64748b;
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 6px;
+          gap: 7px;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .unlimited {
+          background: #f8fafc;
+          color: #64748b;
+        }
+
+        .group-bonus {
+          background: #f5f3ff;
+          color: #6d28d9;
         }
 
         .challenge-grid {
@@ -1525,8 +2179,8 @@ export default function App() {
 
         .progress span {
           display: block;
-          background: linear-gradient(90deg,#10b981,#14b8a6);
           height: 100%;
+          background: linear-gradient(90deg,#10b981,#14b8a6);
         }
 
         .ranking > div {
@@ -1537,13 +2191,10 @@ export default function App() {
           border-radius: 16px;
         }
 
-        .ranking-me {
-          background: #ecfdf5;
-        }
-
         .rank {
           width: 25px;
           font-weight: 950;
+          color: #d97706;
         }
 
         .avatar {
@@ -1551,7 +2202,11 @@ export default function App() {
           height: 43px;
           display: grid;
           place-items: center;
+          border-radius: 50%;
+          background: #0f172a;
+          color: white;
           font-size: 11px;
+          font-weight: 900;
         }
 
         .ranking-name {
@@ -1562,6 +2217,11 @@ export default function App() {
 
         .ranking-name small {
           color: #94a3b8;
+        }
+
+        .demo-note {
+          margin-top: 18px;
+          font-size: 12px;
         }
 
         .profile-grid {
@@ -1588,7 +2248,7 @@ export default function App() {
         }
 
         .profile-stats {
-          grid-template-columns: 1fr;
+          grid-template-columns: 1fr 1fr;
         }
 
         .health-service {
@@ -1607,10 +2267,6 @@ export default function App() {
 
         .health-service small {
           color: #94a3b8;
-        }
-
-        .health-service > svg:last-child {
-          color: #10b981;
         }
 
         .privacy-box {
@@ -1634,7 +2290,6 @@ export default function App() {
           top: 18px;
           left: 50%;
           transform: translateX(-50%);
-          background: #0f172a;
           color: white;
           padding: 12px 17px;
           border-radius: 13px;
@@ -1642,6 +2297,15 @@ export default function App() {
           gap: 8px;
           align-items: center;
           box-shadow: 0 10px 30px rgba(0,0,0,.2);
+          max-width: calc(100vw - 30px);
+        }
+
+        .success-toast {
+          background: #0f172a;
+        }
+
+        .error-toast {
+          background: #be123c;
         }
 
         .spin {
@@ -1649,7 +2313,9 @@ export default function App() {
         }
 
         @keyframes spin {
-          to { transform: rotate(360deg); }
+          to {
+            transform: rotate(360deg);
+          }
         }
 
         .mobile-nav {
@@ -1725,6 +2391,14 @@ export default function App() {
             padding: 18px;
           }
 
+          .health-intro {
+            flex-direction: column;
+          }
+
+          .step-number {
+            font-size: 34px;
+          }
+
           .metrics,
           .tracker-metrics {
             grid-template-columns: repeat(3,1fr);
@@ -1739,7 +2413,7 @@ export default function App() {
             font-size: 15px;
           }
 
-          .tracker-metrics .metric span {
+          .metric span {
             font-size: 10px;
           }
 
