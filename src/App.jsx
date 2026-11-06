@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"; 
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, BarChart3, Bell, Bike, CalendarDays, Check, CheckCircle2, Clock, Footprints,
   Heart, Home, LogOut, MapPin, MessageCircle, Mic, MicOff, Pause, Play,
@@ -275,7 +275,59 @@ export default function App() {
 
   const joinedIds = new Set(invites.filter((i) => i.status === "accepted").map((i) => i.event_id));
   const selectableEvents = events.filter((e) => joinedIds.has(e.id) && new Date(e.starts_at) > new Date());
-  const nav = [["home", "Hem", Home], ["health", "Hälsa", Heart], ["wall", "Vägg", Share2], ["track", "Spåra", MapPin], ["events", "Event", CalendarDays], ["challenges", "Utmaningar", Trophy], ["leaderboard", "Topplista", BarChart3], ["teams", "Lag", Users], ["notifications", `Notiser${unreadCount ? ` (${unreadCount})` : ""}`, Bell], ["privacy", "Integritet", Settings], ["profile", "Profil", User]];
+  const menuGroups = [
+    {
+      id: "home",
+      label: "Hem",
+      icon: Home,
+      defaultPage: "home",
+      pages: ["home", "notifications", "leaderboard"],
+      items: [
+        ["home", "Översikt", Home],
+        ["notifications", `Notiser${unreadCount ? ` (${unreadCount})` : ""}`, Bell],
+        ["leaderboard", "Topplista", BarChart3],
+      ],
+    },
+    {
+      id: "activity",
+      label: "Aktivitet",
+      icon: Activity,
+      defaultPage: "track",
+      pages: ["track", "events"],
+      items: [
+        ["track", "Spåra", MapPin],
+        ["events", "Event", CalendarDays],
+      ],
+    },
+    {
+      id: "community",
+      label: "Gemenskap",
+      icon: Users,
+      defaultPage: "wall",
+      pages: ["wall", "challenges", "teams", "leaderboard"],
+      items: [
+        ["wall", "Vägg", Share2],
+        ["challenges", "Utmaningar", Trophy],
+        ["teams", "Lag", Users],
+        ["leaderboard", "Topplista", BarChart3],
+      ],
+    },
+    {
+      id: "me",
+      label: "Jag",
+      icon: User,
+      defaultPage: "profile",
+      pages: ["profile", "health", "privacy"],
+      items: [
+        ["profile", "Profil", User],
+        ["health", "Hälsa", Heart],
+        ["privacy", "Integritet", Settings],
+      ],
+    },
+  ];
+
+  const activeGroup =
+    menuGroups.find((group) => group.pages.includes(page)) || menuGroups[0];
 
   if (loading) return <div className="loading"><Activity size={46}/><h2>Laddar Pulsly...</h2></div>;
   if (!session) return <Auth/>;
@@ -283,7 +335,8 @@ export default function App() {
   return <div className="app">
     {toast && <div className="toast ok"><CheckCircle2 size={18}/>{toast}</div>}
     {error && <div className="toast bad">{error}</div>}
-    <header><button className="brand" onClick={() => setPage("home")}><span><Activity size={23}/></span>Pulsly</button><nav>{nav.map(([id, label, Icon]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={17}/>{label}</button>)}</nav><button className="avatar" onClick={() => setPage("profile")}>{initials(fullName)}</button></header>
+    <header><button className="brand" onClick={() => setPage("home")}><span><Activity size={23}/></span>Pulsly</button><nav>{menuGroups.map((group) => { const Icon = group.icon; return <button key={group.id} className={activeGroup.id === group.id ? "active" : ""} onClick={() => setPage(group.defaultPage)}><Icon size={17}/>{group.label}</button>; })}</nav><div className="headerActions"><button className="notificationBell" onClick={() => setPage("notifications")} aria-label="Notiser"><Bell size={20}/>{unreadCount > 0 && <span>{unreadCount > 99 ? "99+" : unreadCount}</span>}</button><button className="avatar" onClick={() => setPage("profile")}>{initials(fullName)}</button></div></header>
+    <div className="subnav">{activeGroup.items.map(([id,label,Icon]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={16}/>{label}</button>)}</div>
     <main>
       {page === "home" && <><Title eyebrow="PULSLY" title={`Hej ${fullName.includes("@") ? "där" : fullName.split(" ")[0]}! 👋`} text="All verifierad aktivitet räknas. Ingen daglig poänggräns." action={<button className="dark" onClick={() => setPage("track")}><Play size={18}/>Starta aktivitet</button>}/><Card><div className="verified"><ShieldCheck size={18}/>Din aktivitetsöversikt</div><div className="metrics four"><Metric icon={Footprints} label="Steg" value={totals.steps.toLocaleString("sv-SE")}/><Metric icon={Timer} label="Aktiv tid" value={`${totals.minutes} min`}/><Metric icon={Route} label="Distans" value={`${totals.distance.toFixed(1)} km`}/><Metric icon={Zap} label="Poäng" value={totals.points.toLocaleString("sv-SE")}/></div></Card><div className="grid two"><Card><h2>Aktivitetsvägg</h2>{posts.length ? posts.slice(0, 3).map((p) => <div className="row" key={p.id}><div><b>{p.profiles?.full_name || "Pulsly-medlem"}</b><span>{p.activities?.activity_type}</span></div><ChevronRight/></div>) : <Empty icon={Share2} text="Inga inlägg ännu"/>}</Card><Card><h2>Kommande event</h2>{events.filter((e) => new Date(e.starts_at) > new Date()).slice(0, 3).map((e) => <div className="row" key={e.id}><div><b>{e.title}</b><span>{fmtDate(e.starts_at)}</span></div><span className="pill">{e.activity_type}</span></div>)}</Card></div></>}
 
@@ -304,7 +357,7 @@ export default function App() {
       {page === "profile" && <><Title eyebrow="MIN PROFIL" title={fullName} text={session.user.email}/><div className="grid profile"><Card className="center"><div className="bigavatar">{initials(fullName)}</div><h2>{fullName}</h2><p>{profile?.department || "Pulsly-medlem"}</p><button className="logout full" onClick={signOut}><LogOut size={18}/>Logga ut</button></Card><Card><div className="section"><div><h2>Röstcoach</h2><p>Distans, tid och tempo under aktiviteten.</p></div><button className={`voice ${settings?.voice_coach_enabled ? "on" : ""}`} onClick={() => saveVoice({ voice_coach_enabled: !settings?.voice_coach_enabled })}>{settings?.voice_coach_enabled ? <Mic/> : <MicOff/>}</button></div><label>Läs upp varje<select value={settings?.voice_interval_meters || 1000} onChange={(e) => saveVoice({ voice_interval_meters: Number(e.target.value) })}><option value={500}>500 meter</option><option value={1000}>1 kilometer</option><option value={2000}>2 kilometer</option></select></label><div className="settings">{[["voice_total_time", "Total tid"], ["voice_split_time", "Senaste kilometertid"], ["voice_average_pace", "Genomsnittstempo"], ["voice_speed", "Hastighet vid cykling"]].map(([key, label]) => <button key={key} onClick={() => saveVoice({ [key]: !settings?.[key] })}><span>{label}</span><span className={`switch ${settings?.[key] ? "on" : ""}`}><i/></span></button>)}</div><button className="light full" onClick={() => speak("Pulsly röstcoach. En kilometer. Total tid fem minuter och fyrtiotvå sekunder.")}><Mic size={18}/>Testa röstcoach</button></Card><Card><h2>Hälsoanslutningar</h2><HealthRow icon={Smartphone} name="Apple Health" text="iPhone"/><HealthRow icon={Activity} name="Health Connect" text="Android och Samsung Watch"/><HealthRow icon={Watch} name="Garmin Connect" text="Planerad integration"/></Card></div></>}
     </main>
 
-    <div className="mobile">{nav.map(([id, label, Icon]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={20}/><span>{label}</span></button>)}</div>
+    <div className="mobile">{menuGroups.map((group) => { const Icon = group.icon; return <button key={group.id} className={activeGroup.id === group.id ? "active" : ""} onClick={() => setPage(group.defaultPage)}><Icon size={20}/><span>{group.label}</span></button>; })}</div>
 
     {selectedWorkout && <div className="backdrop"><div className="modal workoutModal"><button className="close" onClick={closeWorkoutDetails}><X/></button><Activity className="green" size={32}/><h2>{selectedWorkout.activity_type}</h2><p>{fmtDate(selectedWorkout.started_at)} · {selectedWorkout.provider}</p><div className="metrics three"><Metric icon={Route} label="Distans" value={`${(Number(selectedWorkout.distance_meters || 0) / 1000).toFixed(2)} km`}/><Metric icon={Timer} label="Tid" value={fmtTime(selectedWorkout.duration_seconds)}/><Metric icon={Heart} label="Snittpuls" value={selectedWorkout.average_heart_rate ? `${selectedWorkout.average_heart_rate} bpm` : "Saknas"}/><Metric icon={Zap} label="Kalorier" value={`${Math.round(Number(selectedWorkout.active_calories || 0))} kcal`}/><Metric icon={Heart} label="Maxpuls" value={selectedWorkout.max_heart_rate ? `${selectedWorkout.max_heart_rate} bpm` : "Saknas"}/><Metric icon={Activity} label="Höjdmeter" value={selectedWorkout.elevation_gain_meters ? `${Math.round(Number(selectedWorkout.elevation_gain_meters))} m` : "Saknas"}/></div><h3>Pulskurva</h3><HeartChart samples={workoutHeart}/><h3>Komplett rutt</h3>{workoutRoute.length ? <ImportedRouteMap points={workoutRoute}/> : <div className="empty routeEmpty"><MapPin size={36}/><b>Ingen importerad rutt för passet</b></div>}<button className="dark full" onClick={() => openImportedShare(selectedWorkout)}><Share2 size={18}/>Dela passet på väggen</button></div></div>}
     {importShareWorkout && <div className="backdrop"><div className="modal"><button className="close" onClick={() => setImportShareWorkout(null)}><X/></button><Share2 className="green" size={32}/><h2>Dela importerat träningspass</h2><p>{importShareWorkout.activity_type} · {(Number(importShareWorkout.distance_meters || 0) / 1000).toFixed(2)} km · {fmtTime(importShareWorkout.duration_seconds)}</p><textarea value={importShareText} placeholder="Skriv något om passet..." onChange={(e) => setImportShareText(e.target.value)}/><label>Synlighet<select value={importShareVisibility} onChange={(e) => setImportShareVisibility(e.target.value)}><option value="private">Privat</option><option value="members">Pulsly-medlemmar</option><option value="public">Offentligt</option></select></label><button className={`choice ${importShareRoute ? "selected" : ""}`} disabled={!importShareWorkout.has_route} onClick={() => setImportShareRoute((v) => !v)}><MapPin/><span><b>Dela GPS-rutt</b><small>{importShareWorkout.has_route ? "Start och slut döljs innan publicering." : "Det här passet saknar importerad rutt."}</small></span>{importShareRoute && <Check/>}</button><div className="modalactions"><button className="light" onClick={() => setImportShareWorkout(null)}>Avbryt</button><button className="dark" onClick={publishImportedWorkout}><Send size={18}/>Publicera</button></div></div></div>}
@@ -350,4 +403,4 @@ const CSS = `
 .leaderCard{margin-top:20px}.leaderRow{padding:12px 0;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f1f5f9}.leaderRow>span{flex:1;display:flex;flex-direction:column}.leaderRow small{color:#94a3b8}.notificationRow{width:100%;padding:14px 8px;border:0;border-bottom:1px solid #f1f5f9;background:white;display:flex;align-items:center;gap:12px;text-align:left}.notificationRow.unread{background:#ecfdf5}.notificationRow>span{flex:1;display:flex;flex-direction:column;gap:4px}.notificationRow small{color:#64748b}.privacyToggle{width:100%;padding:14px 0;border:0;border-bottom:1px solid #f1f5f9;background:white;display:flex;justify-content:space-between;align-items:center;font-weight:800}
 @media(max-width:900px){header nav{display:none}.grid.two,.grid.track,.grid.events,.grid.profile,.grid.healthgrid{grid-template-columns:1fr}.mobile{position:fixed;z-index:50;left:0;right:0;bottom:0;display:flex;justify-content:space-around;padding:8px 2px calc(8px + env(safe-area-inset-bottom));border-top:1px solid #e2e8f0;background:#fffffff5}.mobile button{border:0;background:transparent;color:#94a3b8;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:900}.mobile button.active{color:#059669}}
 @media(max-width:640px){header{padding:0 14px}main{width:calc(100% - 24px);padding:22px 0}.title{flex-direction:column;align-items:stretch}.metrics.four{grid-template-columns:1fr 1fr}.card{padding:18px}.verifyGrid{grid-template-columns:1fr 1fr}.mapbox{height:260px}.modalactions{grid-template-columns:1fr}}
-`;
+.avatar{width:42px;height:42px;border:0;border-radius:50%;background:#0f172a;color:#fff;font-weight:900}.headerActions{display:flex;align-items:center;gap:8px}.notificationBell{width:42px;height:42px;border:0;border-radius:13px;background:#f1f5f9;color:#475569;display:grid;place-items:center;position:relative}.notificationBell span{position:absolute;right:-4px;top:-5px;min-width:19px;height:19px;padding:0 5px;border-radius:999px;background:#e11d48;color:#fff;font-size:10px;font-weight:900;display:grid;place-items:center}.subnav{max-width:1180px;margin:12px auto 0;padding:0 14px;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}.subnav::-webkit-scrollbar{display:none}.subnav button{flex:0 0 auto;border:1px solid #e2e8f0;background:#fff;color:#64748b;border-radius:12px;padding:9px 13px;display:flex;align-items:center;gap:6px;font-weight:800}.subnav button.active{background:#ecfdf5;border-color:#10b981;color:#047857}`;
