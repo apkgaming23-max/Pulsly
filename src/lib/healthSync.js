@@ -2,7 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import { Health } from "@capgo/capacitor-health";
 import { supabase } from "./supabase";
 
-const BASE_READ_TYPES = [
+const IOS_BASE_READ_TYPES = [
   "steps",
   "distance",
   "calories",
@@ -12,10 +12,26 @@ const BASE_READ_TYPES = [
   "workouts",
 ];
 
-const OPTIONAL_READ_TYPES = ["vo2Max"];
+const ANDROID_BASE_READ_TYPES = [
+  "steps",
+  "distance",
+  "calories",
+  "heartRate",
+  "workouts",
+];
+
+const IOS_OPTIONAL_READ_TYPES = ["vo2Max"];
+
+const platform = () => Capacitor.getPlatform();
 
 const providerForPlatform = () =>
-  Capacitor.getPlatform() === "ios" ? "apple_health" : "health_connect";
+  platform() === "ios" ? "apple_health" : "health_connect";
+
+const baseReadTypesForPlatform = () =>
+  platform() === "ios" ? IOS_BASE_READ_TYPES : ANDROID_BASE_READ_TYPES;
+
+const optionalReadTypesForPlatform = () =>
+  platform() === "ios" ? IOS_OPTIONAL_READ_TYPES : [];
 
 const dayStart = (date = new Date()) => {
   const value = new Date(date);
@@ -59,6 +75,15 @@ const latestValue = (samples = []) => {
   return value || null;
 };
 
+const isUnsupportedDataTypeError = (error) => {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("unsupported data type") ||
+    message.includes("not supported") ||
+    message.includes("not implemented")
+  );
+};
+
 async function safeRead(dataType, startDate, endDate, limit = 10000) {
   try {
     const result = await Health.readSamples({
@@ -69,6 +94,10 @@ async function safeRead(dataType, startDate, endDate, limit = 10000) {
     });
     return result?.samples || [];
   } catch (error) {
+    if (isUnsupportedDataTypeError(error)) {
+      console.info(`Pulsly hoppar över ${dataType} på ${platform()}.`);
+      return [];
+    }
     console.warn(`Pulsly kunde inte läsa ${dataType}:`, error);
     return [];
   }
@@ -165,73 +194,68 @@ export async function requestHealthAccess() {
     );
   }
 
-  let optional = [];
-  try {
-    await Health.requestAuthorization({
-      read: [...BASE_READ_TYPES, ...OPTIONAL_READ_TYPES],
-      write: [],
-    });
-    optional = OPTIONAL_READ_TYPES;
-  } catch (error) {
-    console.warn("VO2 max kunde inte begäras. Pulsly fortsätter med basdata.", error);
-    await Health.requestAuthorization({ read: BASE_READ_TYPES, write: [] });
+  const baseReadTypes = baseReadTypesForPlatform();
+  const optionalReadTypes = optionalReadTypesForPlatform();
+  let grantedTypes = [...baseReadTypes];
+
+  if (optionalReadTypes.length) {
+    try {
+      await Health.requestAuthorization({
+        read: [...baseReadTypes, ...optionalReadTypes],
+        write: [],
+      });
+      grantedTypes = [...baseReadTypes, ...optionalReadTypes];
+      return { read: grantedTypes };
+    } catch (error) {
+      console.info(
+        "Valfria hälsotyper kunde inte begäras. Pulsly fortsätter med basdata.",
+        error
+      );
+    }
   }
 
-  return { read: [...BASE_READ_TYPES, ...optional] };
+  await Health.requestAuthorization({ read: baseReadTypes, write: [] });
+  return { read: grantedTypes };
 }
 
 export async function openNativeHealthSettings() {
   if (!Capacitor.isNativePlatform()) {
     return {
       opened: false,
-      message: "Health-inställningar kan bara hanteras i Pulslys mobilapp.",
+      message: "Hälsobehörigheter kan bara hanteras i Pulslys mobilapp.",
     };
   }
 
-  const platform = Capacitor.getPlatform();
-
-  if (platform !== "android") {
+  if (platform() !== "android") {
     return {
       opened: false,
-      message: "Hantera Health-behörigheter i telefonens Inställningar.",
+      message: "Hantera Health-behörigheter i Inställningar på iPhone.",
     };
-  }
-
-  // Version 7.2.15 av @capgo/capacitor-health kan sakna den native
-  // Android-implementation som öppnar Health Connect-inställningarna.
-  // Försök först öppna inställningarna. Om metoden saknas öppnar vi i
-  // stället pluginens behörighetsdialog, utan att visa ett rått native-fel.
-  try {
-    if (typeof Health.openHealthConnectSettings === "function") {
-      await Health.openHealthConnectSettings();
-      return { opened: true, method: "settings" };
-    }
-  } catch (error) {
-    const message = String(error?.message || error || "").toLowerCase();
-    const notImplemented =
-      message.includes("not implemented") ||
-      message.includes("unimplemented") ||
-      message.includes("not available");
-
-    if (!notImplemented) {
-      console.warn("Pulsly kunde inte öppna Health Connect-inställningarna:", error);
-    }
   }
 
   try {
-    await requestHealthAccess();
-    return {
-      opened: true,
-      method: "authorization",
-      message: "Health Connect-behörigheterna har öppnats eller kontrollerats.",
-    };
+    await Health.openHealthConnectSettings();
+    return { opened: true, method: "settings" };
   } catch (error) {
-    console.warn("Pulsly kunde inte öppna Health Connect-behörigheter:", error);
-    return {
-      opened: false,
-      message:
-        "Öppna Health Connect på telefonen och välj Appbehörigheter → Pulsly för att ändra behörigheter.",
-    };
+    if (!isUnsupportedDataTypeError(error)) {
+      console.warn("Health Connect-inställningarna kunde inte öppnas:", error);
+    }
+
+    try {
+      const authorization = await requestHealthAccess();
+      return {
+        opened: false,
+        method: "authorization",
+        authorization,
+        message:
+          "Health Connect-behörigheterna har kontrollerats. Om ingen dialog visas är behörigheterna redan godkända. Ändra dem i Androids Health Connect-inställningar.",
+      };
+    } catch (authorizationError) {
+      throw new Error(
+        authorizationError?.message ||
+          "Kunde inte öppna eller uppdatera Health Connect-behörigheterna."
+      );
+    }
   }
 }
 
@@ -252,6 +276,7 @@ export async function syncNativeHealth({ days = 7 } = {}) {
   }
 
   const provider = providerForPlatform();
+  const isAndroid = platform() === "android";
   let syncLogId = null;
 
   try {
@@ -280,8 +305,10 @@ export async function syncNativeHealth({ days = 7 } = {}) {
           safeRead("steps", start, end),
           safeRead("distance", start, end),
           safeRead("calories", start, end),
-          safeRead("exerciseTime", start, end),
-          safeRead("restingHeartRate", start, end, 1000),
+          isAndroid ? Promise.resolve([]) : safeRead("exerciseTime", start, end),
+          isAndroid
+            ? Promise.resolve([])
+            : safeRead("restingHeartRate", start, end, 1000),
         ]);
 
       dailyRows.push({
@@ -302,15 +329,24 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       .upsert(dailyRows, { onConflict: "user_id,health_date,source" });
     if (dailyError) throw dailyError;
 
-    const workoutResult = await Health.queryWorkouts({
-      startDate: firstDay.toISOString(),
-      endDate: now.toISOString(),
-      limit: 500,
-    });
+    let workouts = [];
+    try {
+      const workoutResult = await Health.queryWorkouts({
+        startDate: firstDay.toISOString(),
+        endDate: now.toISOString(),
+        limit: 500,
+      });
 
-    const workouts = (workoutResult?.workouts || []).map((workout) =>
-      normaliseWorkout(workout, user.id, provider)
-    );
+      workouts = (workoutResult?.workouts || []).map((workout) =>
+        normaliseWorkout(workout, user.id, provider)
+      );
+    } catch (error) {
+      if (isUnsupportedDataTypeError(error)) {
+        console.info("Workout-import stöds inte av denna Health-pluginversion.");
+      } else {
+        console.warn("Pulsly kunde inte läsa träningspass:", error);
+      }
+    }
 
     if (workouts.length) {
       const { error } = await supabase
@@ -352,29 +388,31 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       importedHeartSamples += data?.length || 0;
     }
 
-    const vo2Samples = await safeRead("vo2Max", firstDay, now, 1000);
-    const vo2Rows = vo2Samples
-      .map((sample) => ({
-        user_id: user.id,
-        vo2max_ml_kg_min: numeric(sample.value),
-        recorded_at:
-          sample.startDate || sample.recordedAt || new Date().toISOString(),
-        source: provider,
-        external_id: sampleId(sample, "vo2Max", provider),
-      }))
-      .filter((row) => row.vo2max_ml_kg_min > 0);
-
     let importedVo2Samples = 0;
-    if (vo2Rows.length) {
-      const { data, error } = await supabase
-        .from("vo2max_samples")
-        .upsert(vo2Rows, {
-          onConflict: "user_id,source,external_id",
-          ignoreDuplicates: true,
-        })
-        .select("id");
-      if (error) throw error;
-      importedVo2Samples = data?.length || 0;
+    if (!isAndroid) {
+      const vo2Samples = await safeRead("vo2Max", firstDay, now, 1000);
+      const vo2Rows = vo2Samples
+        .map((sample) => ({
+          user_id: user.id,
+          vo2max_ml_kg_min: numeric(sample.value),
+          recorded_at:
+            sample.startDate || sample.recordedAt || new Date().toISOString(),
+          source: provider,
+          external_id: sampleId(sample, "vo2Max", provider),
+        }))
+        .filter((row) => row.vo2max_ml_kg_min > 0);
+
+      if (vo2Rows.length) {
+        const { data, error } = await supabase
+          .from("vo2max_samples")
+          .upsert(vo2Rows, {
+            onConflict: "user_id,source,external_id",
+            ignoreDuplicates: true,
+          })
+          .select("id");
+        if (error) throw error;
+        importedVo2Samples = data?.length || 0;
+      }
     }
 
     const today = dayStart(now).toISOString().slice(0, 10);
