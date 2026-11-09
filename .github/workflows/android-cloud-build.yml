@@ -31,9 +31,14 @@ jobs:
       - name: Configure Android SDK path
         shell: bash
         run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
           test -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version
 
       - name: Accept Android SDK licenses
@@ -48,6 +53,16 @@ jobs:
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
+
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          echo "Android SDK: $ANDROID_HOME"
+
+          test -d "$ANDROID_HOME/platforms/android-35"
+          test -d "$ANDROID_HOME/build-tools/35.0.0"
+
+          echo "Android SDK verified"
 
       - name: Install dependencies
         run: bun install
@@ -72,17 +87,31 @@ jobs:
         shell: bash
         run: |
           test -f android/variables.gradle
-          sed -i -E 's/minSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/minSdkVersion = 26/' android/variables.gradle
+
+          sed -i -E \
+            's/minSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/minSdkVersion = 26/' \
+            android/variables.gradle
+
+          echo "Android SDK configuration:"
           grep "minSdkVersion" android/variables.gradle
+
+          grep -q "minSdkVersion = 26" android/variables.gradle
 
       - name: Configure Pulsly Health Connect manifest
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import xml.etree.ElementTree as ET
 
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
-          text = manifest.read_text(encoding="utf-8")
+          manifest_path = Path(
+              "android/app/src/main/AndroidManifest.xml"
+          )
+
+          if not manifest_path.exists():
+              raise SystemExit(
+                  "AndroidManifest.xml was not generated"
+              )
 
           permissions = [
               "android.permission.health.READ_STEPS",
@@ -92,31 +121,100 @@ jobs:
               "android.permission.health.READ_EXERCISE",
           ]
 
-          additions = []
+          android_namespace = (
+              "http://schemas.android.com/apk/res/android"
+          )
+
+          android_name = (
+              "{"
+              + android_namespace
+              + "}name"
+          )
+
+          ET.register_namespace(
+              "android",
+              android_namespace
+          )
+
+          tree = ET.parse(manifest_path)
+
+          root = tree.getroot()
+
+          existing_permissions = {
+              element.get(android_name)
+              for element in root.findall(
+                  "uses-permission"
+              )
+          }
+
           for permission in permissions:
-              marker = f'android:name="{permission}"'
-              if marker not in text:
-                  additions.append(f'    <uses-permission android:name="{permission}" />')
+              if permission not in existing_permissions:
+                  element = ET.Element(
+                      "uses-permission"
+                  )
 
-          if additions:
-              pos = text.find(">")
-              if pos == -1 or "<manifest" not in text[:pos + 1]:
-                  raise SystemExit("Could not locate <manifest> opening tag")
-              text = text[:pos + 1] + "\n" + "\n".join(additions) + text[pos + 1:]
-              manifest.write_text(text, encoding="utf-8")
+                  element.set(
+                      android_name,
+                      permission
+                  )
 
-          print(manifest.read_text(encoding="utf-8"))
+                  root.insert(
+                      0,
+                      element
+                  )
+
+          tree.write(
+              manifest_path,
+              encoding="utf-8",
+              xml_declaration=True
+          )
+
+          print(
+              "Health Connect permissions added:"
+          )
+
+          for permission in permissions:
+              print(permission)
+
           PY
+
+          echo ""
+          echo "Final AndroidManifest.xml:"
+          cat android/app/src/main/AndroidManifest.xml
 
       - name: Verify Pulsly Health Connect permissions
         shell: bash
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          grep -F 'android.permission.health.READ_STEPS' "$MANIFEST"
-          grep -F 'android.permission.health.READ_DISTANCE' "$MANIFEST"
-          grep -F 'android.permission.health.READ_ACTIVE_CALORIES_BURNED' "$MANIFEST"
-          grep -F 'android.permission.health.READ_HEART_RATE' "$MANIFEST"
-          grep -F 'android.permission.health.READ_EXERCISE' "$MANIFEST"
+
+          test -f "$MANIFEST"
+
+          grep -q \
+            "android.permission.health.READ_STEPS" \
+            "$MANIFEST"
+
+          grep -q \
+            "android.permission.health.READ_DISTANCE" \
+            "$MANIFEST"
+
+          grep -q \
+            "android.permission.health.READ_ACTIVE_CALORIES_BURNED" \
+            "$MANIFEST"
+
+          grep -q \
+            "android.permission.health.READ_HEART_RATE" \
+            "$MANIFEST"
+
+          grep -q \
+            "android.permission.health.READ_EXERCISE" \
+            "$MANIFEST"
+
+          echo ""
+          echo "All Pulsly Health Connect permissions verified."
+
+      - name: Show Capacitor configuration
+        run: bunx cap doctor android
+        continue-on-error: true
 
       - name: Make Gradle executable
         run: chmod +x android/gradlew
@@ -128,8 +226,16 @@ jobs:
       - name: Verify Pulsly APK
         shell: bash
         run: |
-          ls -lh android/app/build/outputs/apk/debug/
-          test -f android/app/build/outputs/apk/debug/app-debug.apk
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          echo "Checking generated APK..."
+
+          test -f "$APK"
+
+          ls -lh "$APK"
+
+          echo ""
+          echo "Pulsly APK successfully generated."
 
       - name: Upload Pulsly APK
         uses: actions/upload-artifact@v4
