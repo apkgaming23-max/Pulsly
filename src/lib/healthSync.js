@@ -9,29 +9,22 @@ const IOS_BASE_READ_TYPES = [
   "heartRate",
   "restingHeartRate",
   "exerciseTime",
-  "workouts",
-];
-
-const ANDROID_BASE_READ_TYPES = [
-  "steps",
-  "distance",
-  "calories",
-  "heartRate",
-  "workouts",
 ];
 
 const IOS_OPTIONAL_READ_TYPES = ["vo2Max"];
 
-const platform = () => Capacitor.getPlatform();
+// Verifierade mot den Android/Health Connect-version som faktiskt körs i Pulsly.
+// Workouts ska INTE skickas till requestAuthorization/readSamples.
+const ANDROID_READ_TYPES = ["steps", "distance", "calories", "heartRate"];
+
+const isAndroid = () => Capacitor.getPlatform() === "android";
+const isIOS = () => Capacitor.getPlatform() === "ios";
 
 const providerForPlatform = () =>
-  platform() === "ios" ? "apple_health" : "health_connect";
+  isIOS() ? "apple_health" : "health_connect";
 
-const baseReadTypesForPlatform = () =>
-  platform() === "ios" ? IOS_BASE_READ_TYPES : ANDROID_BASE_READ_TYPES;
-
-const optionalReadTypesForPlatform = () =>
-  platform() === "ios" ? IOS_OPTIONAL_READ_TYPES : [];
+const authorizationTypesForPlatform = () =>
+  isAndroid() ? ANDROID_READ_TYPES : IOS_BASE_READ_TYPES;
 
 const dayStart = (date = new Date()) => {
   const value = new Date(date);
@@ -75,14 +68,8 @@ const latestValue = (samples = []) => {
   return value || null;
 };
 
-const isUnsupportedDataTypeError = (error) => {
-  const message = String(error?.message || error || "").toLowerCase();
-  return (
-    message.includes("unsupported data type") ||
-    message.includes("not supported") ||
-    message.includes("not implemented")
-  );
-};
+const isUnsupportedDataTypeError = (error) =>
+  /unsupported\s+data\s+type/i.test(String(error?.message || error || ""));
 
 async function safeRead(dataType, startDate, endDate, limit = 10000) {
   try {
@@ -94,12 +81,27 @@ async function safeRead(dataType, startDate, endDate, limit = 10000) {
     });
     return result?.samples || [];
   } catch (error) {
-    if (isUnsupportedDataTypeError(error)) {
-      console.info(`Pulsly hoppar över ${dataType} på ${platform()}.`);
-      return [];
-    }
     console.warn(`Pulsly kunde inte läsa ${dataType}:`, error);
     return [];
+  }
+}
+
+async function safeQueryWorkouts(startDate, endDate) {
+  try {
+    const result = await Health.queryWorkouts({
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      limit: 500,
+    });
+    return { supported: true, workouts: result?.workouts || [] };
+  } catch (error) {
+    // Workout-query får aldrig stoppa steg/puls-synken.
+    console.warn("Pulsly kunde inte läsa träningspass från Health:", error);
+    return {
+      supported: false,
+      workouts: [],
+      reason: error?.message || "Träningspass stöds inte av denna Health-version.",
+    };
   }
 }
 
@@ -116,7 +118,9 @@ function normaliseWorkout(workout, userId, provider) {
     workout.id ||
       workout.uuid ||
       workout.externalId ||
-      `${provider}:${start || Date.now()}:${workout.workoutType || workout.activityType || "workout"}`
+      `${provider}:${start || Date.now()}:${
+        workout.workoutType || workout.activityType || "workout"
+      }`
   );
 
   return {
@@ -172,12 +176,15 @@ export async function isNativeHealthAvailable() {
   if (!Capacitor.isNativePlatform()) {
     return {
       available: false,
-      reason: "Pulsly körs i webbläsaren. HealthKit och Health Connect kräver mobilappen.",
+      reason:
+        "Pulsly körs i webbläsaren. HealthKit och Health Connect kräver mobilappen.",
     };
   }
 
   try {
-    return await Health.isAvailable();
+    const result = await Health.isAvailable();
+    if (typeof result === "boolean") return { available: result };
+    return result;
   } catch (error) {
     return {
       available: false,
@@ -188,75 +195,83 @@ export async function isNativeHealthAvailable() {
 
 export async function requestHealthAccess() {
   const availability = await isNativeHealthAvailable();
-  if (!availability.available) {
+  if (!availability?.available) {
     throw new Error(
-      availability.reason || "HealthKit eller Health Connect är inte tillgängligt."
+      availability?.reason ||
+        "HealthKit eller Health Connect är inte tillgängligt."
     );
   }
 
-  const baseReadTypes = baseReadTypesForPlatform();
-  const optionalReadTypes = optionalReadTypesForPlatform();
-  let grantedTypes = [...baseReadTypes];
-
-  if (optionalReadTypes.length) {
-    try {
-      await Health.requestAuthorization({
-        read: [...baseReadTypes, ...optionalReadTypes],
-        write: [],
-      });
-      grantedTypes = [...baseReadTypes, ...optionalReadTypes];
-      return { read: grantedTypes };
-    } catch (error) {
-      console.info(
-        "Valfria hälsotyper kunde inte begäras. Pulsly fortsätter med basdata.",
-        error
-      );
-    }
+  if (isAndroid()) {
+    // Viktigt: workouts, restingHeartRate, exerciseTime och vo2Max skickas
+    // inte till v7.2.15 på Android eftersom de har gett unsupported-data-type.
+    await Health.requestAuthorization({
+      read: ANDROID_READ_TYPES,
+      write: [],
+    });
+    return { read: [...ANDROID_READ_TYPES] };
   }
 
-  await Health.requestAuthorization({ read: baseReadTypes, write: [] });
-  return { read: grantedTypes };
+  let read = [...IOS_BASE_READ_TYPES];
+  try {
+    await Health.requestAuthorization({
+      read: [...IOS_BASE_READ_TYPES, ...IOS_OPTIONAL_READ_TYPES],
+      write: [],
+    });
+    read = [...IOS_BASE_READ_TYPES, ...IOS_OPTIONAL_READ_TYPES];
+  } catch (error) {
+    console.warn("VO2 max kunde inte begäras. Pulsly fortsätter med basdata.", error);
+    await Health.requestAuthorization({ read: IOS_BASE_READ_TYPES, write: [] });
+  }
+
+  return { read };
 }
 
 export async function openNativeHealthSettings() {
   if (!Capacitor.isNativePlatform()) {
     return {
-      opened: false,
-      message: "Hälsobehörigheter kan bara hanteras i Pulslys mobilapp.",
+      success: false,
+      message: "Hälsobehörigheter kan bara hanteras i Pulsly-appen.",
     };
   }
 
-  if (platform() !== "android") {
-    return {
-      opened: false,
-      message: "Hantera Health-behörigheter i Inställningar på iPhone.",
-    };
-  }
-
-  try {
-    await Health.openHealthConnectSettings();
-    return { opened: true, method: "settings" };
-  } catch (error) {
-    if (!isUnsupportedDataTypeError(error)) {
-      console.warn("Health Connect-inställningarna kunde inte öppnas:", error);
+  if (isAndroid()) {
+    // @capgo/capacitor-health 7.2.15 i den installerade APK:n har visat att
+    // openHealthConnectSettings inte är implementerad. Försök bara om den
+    // fungerar, annars öppna behörighetsdialogen på nytt med verifierade typer.
+    try {
+      if (typeof Health.openHealthConnectSettings === "function") {
+        await Health.openHealthConnectSettings();
+        return { success: true, openedSettings: true };
+      }
+    } catch (error) {
+      console.warn("Direktöppning av Health Connect stöds inte i denna version:", error);
     }
 
     try {
-      const authorization = await requestHealthAccess();
+      await Health.requestAuthorization({
+        read: ANDROID_READ_TYPES,
+        write: [],
+      });
       return {
-        opened: false,
-        method: "authorization",
-        authorization,
+        success: true,
+        openedSettings: false,
         message:
-          "Health Connect-behörigheterna har kontrollerats. Om ingen dialog visas är behörigheterna redan godkända. Ändra dem i Androids Health Connect-inställningar.",
+          "Health Connect-behörigheterna har kontrollerats. Ändra enskilda behörigheter i Androids Health Connect-inställningar vid behov.",
       };
-    } catch (authorizationError) {
-      throw new Error(
-        authorizationError?.message ||
-          "Kunde inte öppna eller uppdatera Health Connect-behörigheterna."
-      );
+    } catch (error) {
+      if (isUnsupportedDataTypeError(error)) {
+        throw new Error(
+          "Health Connect-versionen på telefonen stöder inte någon av Pulslys begärda hälsotyper."
+        );
+      }
+      throw error;
     }
   }
+
+  // iOS hanterar HealthKit-behörigheter via authorization-dialogen.
+  await requestHealthAccess();
+  return { success: true, openedSettings: false };
 }
 
 export async function syncNativeHealth({ days = 7 } = {}) {
@@ -276,14 +291,14 @@ export async function syncNativeHealth({ days = 7 } = {}) {
   }
 
   const provider = providerForPlatform();
-  const isAndroid = platform() === "android";
   let syncLogId = null;
 
   try {
     const availability = await isNativeHealthAvailable();
-    if (!availability.available) {
+    if (!availability?.available) {
       throw new Error(
-        availability.reason || "HealthKit eller Health Connect är inte tillgängligt."
+        availability?.reason ||
+          "HealthKit eller Health Connect är inte tillgängligt."
       );
     }
 
@@ -300,25 +315,34 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       const candidateEnd = dayEnd(target);
       const end = candidateEnd > now ? now : candidateEnd;
 
-      const [steps, distance, calories, exerciseTime, restingHeartRate] =
-        await Promise.all([
-          safeRead("steps", start, end),
-          safeRead("distance", start, end),
-          safeRead("calories", start, end),
-          isAndroid ? Promise.resolve([]) : safeRead("exerciseTime", start, end),
-          isAndroid
-            ? Promise.resolve([])
-            : safeRead("restingHeartRate", start, end, 1000),
-        ]);
+      const baseReads = [
+        safeRead("steps", start, end),
+        safeRead("distance", start, end),
+        safeRead("calories", start, end),
+      ];
+
+      if (isIOS()) {
+        baseReads.push(
+          safeRead("exerciseTime", start, end),
+          safeRead("restingHeartRate", start, end, 1000)
+        );
+      }
+
+      const results = await Promise.all(baseReads);
+      const steps = results[0] || [];
+      const distance = results[1] || [];
+      const calories = results[2] || [];
+      const exerciseTime = isIOS() ? results[3] || [] : [];
+      const restingHeartRate = isIOS() ? results[4] || [] : [];
 
       dailyRows.push({
         user_id: user.id,
         health_date: start.toISOString().slice(0, 10),
         steps: Math.round(sumSamples(steps)),
-        active_minutes: Math.round(sumSamples(exerciseTime)),
+        active_minutes: isIOS() ? Math.round(sumSamples(exerciseTime)) : 0,
         distance_meters: Math.round(sumSamples(distance)),
         active_calories: Number(sumSamples(calories).toFixed(2)),
-        resting_heart_rate: latestValue(restingHeartRate),
+        resting_heart_rate: isIOS() ? latestValue(restingHeartRate) : null,
         source: provider,
         synced_at: new Date().toISOString(),
       });
@@ -329,24 +353,11 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       .upsert(dailyRows, { onConflict: "user_id,health_date,source" });
     if (dailyError) throw dailyError;
 
-    let workouts = [];
-    try {
-      const workoutResult = await Health.queryWorkouts({
-        startDate: firstDay.toISOString(),
-        endDate: now.toISOString(),
-        limit: 500,
-      });
-
-      workouts = (workoutResult?.workouts || []).map((workout) =>
-        normaliseWorkout(workout, user.id, provider)
-      );
-    } catch (error) {
-      if (isUnsupportedDataTypeError(error)) {
-        console.info("Workout-import stöds inte av denna Health-pluginversion.");
-      } else {
-        console.warn("Pulsly kunde inte läsa träningspass:", error);
-      }
-    }
+    // Workouts är ett separat API. Det ligger aldrig i requestAuthorization.
+    const workoutQuery = await safeQueryWorkouts(firstDay, now);
+    const workouts = workoutQuery.workouts.map((workout) =>
+      normaliseWorkout(workout, user.id, provider)
+    );
 
     if (workouts.length) {
       const { error } = await supabase
@@ -355,10 +366,16 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       if (error) throw error;
     }
 
-    const { error: duplicateError } = await supabase.rpc(
-      "find_my_health_workout_duplicates"
-    );
-    if (duplicateError) throw duplicateError;
+    // Workout-deduplicering ska inte blockera vanlig Health Connect-synk om
+    // workout-API:t inte stöds i pluginversionen.
+    if (workoutQuery.supported) {
+      const { error: duplicateError } = await supabase.rpc(
+        "find_my_health_workout_duplicates"
+      );
+      if (duplicateError) {
+        console.warn("Workout-deduplicering kunde inte köras:", duplicateError);
+      }
+    }
 
     const heartSamples = await safeRead("heartRate", firstDay, now, 50000);
     const heartRows = heartSamples
@@ -389,7 +406,7 @@ export async function syncNativeHealth({ days = 7 } = {}) {
     }
 
     let importedVo2Samples = 0;
-    if (!isAndroid) {
+    if (isIOS()) {
       const vo2Samples = await safeRead("vo2Max", firstDay, now, 1000);
       const vo2Rows = vo2Samples
         .map((sample) => ({
@@ -436,14 +453,21 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       );
     if (providerError) throw providerError;
 
+    const warnings = [];
+    if (!workoutQuery.supported && workoutQuery.reason) {
+      warnings.push(workoutQuery.reason);
+    }
+
     await finishSyncLog(syncLogId, {
-      status: "success",
+      status: warnings.length ? "partial" : "success",
       imported_daily_records: dailyRows.length,
       imported_workouts: workouts.length,
       imported_heart_samples: importedHeartSamples,
       imported_vo2_samples: importedVo2Samples,
       imported_route_points: 0,
-      message: "Health-synk slutförd",
+      message: warnings.length
+        ? `Health-synk slutförd med begränsningar: ${warnings.join("; ")}`
+        : "Health-synk slutförd",
     });
 
     return {
@@ -454,6 +478,7 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       importedVo2Samples,
       importedRoutePoints: 0,
       passivePoints: numeric(passivePoints),
+      warnings,
     };
   } catch (error) {
     await finishSyncLog(syncLogId, {
