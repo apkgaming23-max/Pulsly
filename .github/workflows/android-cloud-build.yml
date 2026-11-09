@@ -2,7 +2,6 @@ name: Build Pulsly Android APK
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - main
@@ -32,14 +31,9 @@ jobs:
       - name: Configure Android SDK path
         shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-
           test -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version
 
       - name: Accept Android SDK licenses
@@ -54,13 +48,6 @@ jobs:
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
-
-      - name: Verify Android SDK
-        shell: bash
-        run: |
-          echo "Android SDK: $ANDROID_HOME"
-          ls -la "$ANDROID_HOME/platforms/android-35"
-          ls -la "$ANDROID_HOME/build-tools/35.0.0"
 
       - name: Install dependencies
         run: bun install
@@ -84,24 +71,52 @@ jobs:
       - name: Set Android minimum SDK to 26
         shell: bash
         run: |
-          echo "Setting Pulsly minSdkVersion to 26"
-
-          if [ ! -f "android/variables.gradle" ]; then
-            echo "ERROR: android/variables.gradle was not generated."
-            exit 1
-          fi
-
+          test -f android/variables.gradle
           sed -i -E 's/minSdkVersion[[:space:]]*=[[:space:]]*[0-9]+/minSdkVersion = 26/' android/variables.gradle
-
-          echo "Current Android SDK configuration:"
-          cat android/variables.gradle
-
-          echo "Checking minSdkVersion:"
           grep "minSdkVersion" android/variables.gradle
 
-      - name: Show Capacitor configuration
-        run: bunx cap doctor android
-        continue-on-error: true
+      - name: Configure Pulsly Health Connect manifest
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text(encoding="utf-8")
+
+          permissions = [
+              "android.permission.health.READ_STEPS",
+              "android.permission.health.READ_DISTANCE",
+              "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
+              "android.permission.health.READ_HEART_RATE",
+              "android.permission.health.READ_EXERCISE",
+          ]
+
+          additions = []
+          for permission in permissions:
+              marker = f'android:name="{permission}"'
+              if marker not in text:
+                  additions.append(f'    <uses-permission android:name="{permission}" />')
+
+          if additions:
+              pos = text.find(">")
+              if pos == -1 or "<manifest" not in text[:pos + 1]:
+                  raise SystemExit("Could not locate <manifest> opening tag")
+              text = text[:pos + 1] + "\n" + "\n".join(additions) + text[pos + 1:]
+              manifest.write_text(text, encoding="utf-8")
+
+          print(manifest.read_text(encoding="utf-8"))
+          PY
+
+      - name: Verify Pulsly Health Connect permissions
+        shell: bash
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          grep -F 'android.permission.health.READ_STEPS' "$MANIFEST"
+          grep -F 'android.permission.health.READ_DISTANCE' "$MANIFEST"
+          grep -F 'android.permission.health.READ_ACTIVE_CALORIES_BURNED' "$MANIFEST"
+          grep -F 'android.permission.health.READ_HEART_RATE' "$MANIFEST"
+          grep -F 'android.permission.health.READ_EXERCISE' "$MANIFEST"
 
       - name: Make Gradle executable
         run: chmod +x android/gradlew
@@ -113,9 +128,7 @@ jobs:
       - name: Verify Pulsly APK
         shell: bash
         run: |
-          echo "Generated APK:"
           ls -lh android/app/build/outputs/apk/debug/
-
           test -f android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload Pulsly APK
