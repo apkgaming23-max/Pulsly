@@ -3,21 +3,12 @@ import { Health } from "@capgo/capacitor-health";
 import { supabase } from "./supabase";
 
 const ANDROID_READ_TYPES = ["steps", "distance", "calories", "heartRate"];
-const IOS_BASE_READ_TYPES = [
-  "steps",
-  "distance",
-  "calories",
-  "heartRate",
-  "restingHeartRate",
-  "exerciseTime",
-];
+const IOS_BASE_READ_TYPES = ["steps", "distance", "calories", "heartRate", "restingHeartRate", "exerciseTime"];
 const IOS_OPTIONAL_READ_TYPES = ["vo2Max"];
 
 const platform = () => Capacitor.getPlatform();
-const providerForPlatform = () =>
-  platform() === "ios" ? "apple_health" : "health_connect";
-const readTypesForPlatform = () =>
-  platform() === "android" ? ANDROID_READ_TYPES : IOS_BASE_READ_TYPES;
+const providerForPlatform = () => (platform() === "ios" ? "apple_health" : "health_connect");
+const readTypesForPlatform = () => (platform() === "ios" ? IOS_BASE_READ_TYPES : ANDROID_READ_TYPES);
 
 const dayStart = (date = new Date()) => {
   const value = new Date(date);
@@ -40,34 +31,19 @@ const sampleId = (sample, dataType, provider) => {
   const nativeId = sample?.id || sample?.uuid || sample?.externalId || sample?.recordId;
   if (nativeId) return String(nativeId);
   const when = sample?.startDate || sample?.recordedAt || sample?.endDate || "";
-  const value = sample?.value ?? "";
-  return `${provider}:${dataType}:${when}:${value}`;
+  return `${provider}:${dataType}:${when}:${sample?.value ?? ""}`;
 };
 
-const sumSamples = (samples = []) =>
-  samples.reduce((total, sample) => total + numeric(sample?.value), 0);
+const sumSamples = (samples = []) => samples.reduce((total, sample) => total + numeric(sample?.value), 0);
 
 const latestValue = (samples = []) => {
   if (!samples.length) return null;
   const sorted = [...samples].sort(
-    (a, b) =>
-      new Date(b.startDate || b.recordedAt || 0) -
-      new Date(a.startDate || a.recordedAt || 0)
+    (a, b) => new Date(b.startDate || b.recordedAt || 0) - new Date(a.startDate || a.recordedAt || 0)
   );
   const value = numeric(sorted[0]?.value);
   return value || null;
 };
-
-function friendlyHealthError(error) {
-  const raw = String(error?.message || error || "Okänt fel");
-  if (/unsupported data type/i.test(raw)) {
-    return "Den installerade Health Connect-versionen stöder inte en av de begärda datatyperna.";
-  }
-  if (/not implemented/i.test(raw)) {
-    return "Den här Health Connect-funktionen stöds inte av den installerade Android-versionen.";
-  }
-  return raw;
-}
 
 async function safeRead(dataType, startDate, endDate, limit = 10000) {
   try {
@@ -84,64 +60,14 @@ async function safeRead(dataType, startDate, endDate, limit = 10000) {
   }
 }
 
-async function authorizationState() {
-  if (!Capacitor.isNativePlatform()) {
-    return { available: false, authorized: false, status: "web" };
-  }
-
-  let availability;
-  try {
-    availability = await Health.isAvailable();
-  } catch (error) {
-    return {
-      available: false,
-      authorized: false,
-      status: "unavailable",
-      reason: friendlyHealthError(error),
-    };
-  }
-
-  if (!availability?.available) {
-    return {
-      available: false,
-      authorized: false,
-      status: "unavailable",
-      reason: availability?.reason || "Health Connect eller HealthKit är inte tillgängligt.",
-    };
-  }
-
-  try {
-    const result = await Health.checkAuthorization({ read: readTypesForPlatform(), write: [] });
-    const raw = result?.granted ?? result?.authorized ?? result?.hasAccess;
-    const authorized = raw === true;
-    return {
-      available: true,
-      authorized,
-      status: authorized ? "connected" : "permission_required",
-      authorization: result,
-    };
-  } catch (error) {
-    // En saknad/annorlunda checkAuthorization-implementation får aldrig märkas som ansluten.
-    return {
-      available: true,
-      authorized: false,
-      status: "permission_required",
-      reason: friendlyHealthError(error),
-    };
-  }
-}
-
 function normaliseWorkout(workout, userId, provider) {
   const start = workout.startDate || workout.startTime || workout.startedAt;
   const end = workout.endDate || workout.endTime || workout.endedAt;
-  const durationSeconds =
-    numeric(workout.durationSeconds) ||
+  const durationSeconds = numeric(workout.durationSeconds) ||
     (start && end ? Math.max(0, Math.round((new Date(end) - new Date(start)) / 1000)) : 0);
   const externalId = String(
-    workout.id ||
-      workout.uuid ||
-      workout.externalId ||
-      `${provider}:${start || Date.now()}:${workout.workoutType || workout.activityType || "workout"}`
+    workout.id || workout.uuid || workout.externalId ||
+    `${provider}:${start || Date.now()}:${workout.workoutType || workout.activityType || "workout"}`
   );
 
   return {
@@ -182,97 +108,53 @@ async function finishSyncLog(id, values) {
     .eq("id", id);
 }
 
-export async function getNativeHealthStatus() {
-  return authorizationState();
-}
-
 export async function isNativeHealthAvailable() {
-  const state = await authorizationState();
-  return {
-    available: state.available,
-    authorized: state.authorized,
-    connected: state.authorized,
-    status: state.status,
-    reason: state.reason,
-  };
+  if (!Capacitor.isNativePlatform()) {
+    return {
+      available: false,
+      reason: "Pulsly körs i webbläsaren. HealthKit och Health Connect kräver mobilappen.",
+    };
+  }
+
+  try {
+    const result = await Health.isAvailable();
+    return {
+      ...result,
+      available: Boolean(result?.available),
+      reason: result?.reason || "",
+    };
+  } catch (error) {
+    return { available: false, reason: error?.message || "Hälsotjänsten kunde inte kontrolleras." };
+  }
 }
 
 export async function requestHealthAccess() {
-  if (!Capacitor.isNativePlatform()) {
-    throw new Error("Health Connect och HealthKit kräver Pulsly-appen på en telefon.");
+  const availability = await isNativeHealthAvailable();
+  if (!availability.available) {
+    throw new Error(availability.reason || "HealthKit eller Health Connect är inte tillgängligt.");
   }
 
-  const availability = await Health.isAvailable();
-  if (!availability?.available) {
-    throw new Error(availability?.reason || "Health Connect eller HealthKit är inte tillgängligt.");
-  }
-
-  const read = readTypesForPlatform();
-
+  const baseTypes = readTypesForPlatform();
   if (platform() === "ios") {
     try {
-      await Health.requestAuthorization({
-        read: [...read, ...IOS_OPTIONAL_READ_TYPES],
-        write: [],
-      });
-      return { read: [...read, ...IOS_OPTIONAL_READ_TYPES] };
+      await Health.requestAuthorization({ read: [...baseTypes, ...IOS_OPTIONAL_READ_TYPES], write: [] });
+      return { read: [...baseTypes, ...IOS_OPTIONAL_READ_TYPES] };
     } catch (error) {
       console.warn("VO2 max kunde inte begäras. Pulsly fortsätter med basdata.", error);
     }
   }
 
-  try {
-    await Health.requestAuthorization({ read, write: [] });
-    return { read };
-  } catch (error) {
-    throw new Error(friendlyHealthError(error));
-  }
+  await Health.requestAuthorization({ read: baseTypes, write: [] });
+  return { read: baseTypes };
 }
 
+// Behålls för bakåtkompatibilitet. Android v7-pluginen i Pulsly kan inte
+// öppna Health Connect-inställningssidan pålitligt, därför görs inget tyst
+// native-anrop här. App.jsx visar i stället den korrekta Android-sökvägen.
 export async function openNativeHealthSettings() {
-  if (!Capacitor.isNativePlatform()) {
-    return {
-      opened: false,
-      message: "Health-behörigheter hanteras i mobilappen.",
-    };
-  }
-
-  if (platform() === "android") {
-    try {
-      if (typeof Health.openHealthConnectSettings === "function") {
-        await Health.openHealthConnectSettings();
-        return { opened: true };
-      }
-    } catch (error) {
-      console.warn("Direktöppning av Health Connect stöds inte i denna pluginversion.", error);
-    }
-
-    // v7.2.15 på den testade Android-enheten implementerar inte settings-anropet.
-    // Begär behörighet igen i stället för att misslyckas tyst.
-    try {
-      await requestHealthAccess();
-      const status = await authorizationState();
-      return {
-        opened: false,
-        requested: true,
-        status,
-        message: status.authorized
-          ? "Pulsly har hälsobehörighet. Ändra detaljer i Health Connect under Appbehörigheter → Pulsly."
-          : "Öppna Health Connect → Appbehörigheter → Pulsly för att ge eller ändra behörigheter.",
-      };
-    } catch (error) {
-      return {
-        opened: false,
-        requested: false,
-        message: "Öppna Health Connect → Appbehörigheter → Pulsly för att ge eller ändra behörigheter.",
-        error: friendlyHealthError(error),
-      };
-    }
-  }
-
   return {
     opened: false,
-    message: "Hantera Apple Health-behörigheter i Inställningar → Hälsa → Dataåtkomst och enheter → Pulsly.",
+    instruction: "Öppna Health Connect → Appbehörigheter → Pulsly för att ändra behörigheter.",
   };
 }
 
@@ -288,6 +170,9 @@ export async function syncNativeHealth({ days = 7 } = {}) {
   let syncLogId = null;
 
   try {
+    const availability = await isNativeHealthAvailable();
+    if (!availability.available) throw new Error(availability.reason || "Health Connect är inte tillgängligt.");
+
     await requestHealthAccess();
     syncLogId = await startSyncLog(user.id, provider);
 
@@ -301,13 +186,12 @@ export async function syncNativeHealth({ days = 7 } = {}) {
       const candidateEnd = dayEnd(target);
       const end = candidateEnd > now ? now : candidateEnd;
 
-      const [steps, distance, calories, exerciseTime, restingHeartRate] = await Promise.all([
-        safeRead("steps", start, end),
-        safeRead("distance", start, end),
-        safeRead("calories", start, end),
-        platform() === "ios" ? safeRead("exerciseTime", start, end) : Promise.resolve([]),
-        platform() === "ios" ? safeRead("restingHeartRate", start, end, 1000) : Promise.resolve([]),
-      ]);
+      const jobs = [safeRead("steps", start, end), safeRead("distance", start, end), safeRead("calories", start, end)];
+      if (platform() === "ios") jobs.push(safeRead("exerciseTime", start, end), safeRead("restingHeartRate", start, end, 1000));
+      const values = await Promise.all(jobs);
+      const [steps, distance, calories] = values;
+      const exerciseTime = platform() === "ios" ? values[3] : [];
+      const restingHeartRate = platform() === "ios" ? values[4] : [];
 
       dailyRows.push({
         user_id: user.id,
@@ -334,9 +218,7 @@ export async function syncNativeHealth({ days = 7 } = {}) {
         endDate: now.toISOString(),
         limit: 500,
       });
-      workouts = (workoutResult?.workouts || []).map((workout) =>
-        normaliseWorkout(workout, user.id, provider)
-      );
+      workouts = (workoutResult?.workouts || []).map((workout) => normaliseWorkout(workout, user.id, provider));
       if (workouts.length) {
         const { error } = await supabase
           .from("imported_workouts")
@@ -344,12 +226,16 @@ export async function syncNativeHealth({ days = 7 } = {}) {
         if (error) throw error;
       }
     } catch (error) {
-      console.warn("Workout-import stöds inte fullt ut på denna Android/Health-version.", error);
+      console.warn("Pulsly kunde inte läsa träningspass. Övrig Health-synk fortsätter.", error);
       workouts = [];
     }
 
-    const { error: duplicateError } = await supabase.rpc("find_my_health_workout_duplicates");
-    if (duplicateError) console.warn("Dublettkontroll kunde inte köras:", duplicateError);
+    try {
+      const { error } = await supabase.rpc("find_my_health_workout_duplicates");
+      if (error) console.warn("Dublettkontrollen kunde inte köras:", error);
+    } catch (error) {
+      console.warn("Dublettkontrollen kunde inte köras:", error);
+    }
 
     const heartSamples = await safeRead("heartRate", firstDay, now, 50000);
     const heartRows = heartSamples
@@ -404,15 +290,15 @@ export async function syncNativeHealth({ days = 7 } = {}) {
     );
     if (passiveError) throw passiveError;
 
-    const syncedAt = new Date().toISOString();
     const { error: providerError } = await supabase
       .from("health_providers")
       .upsert(
-        { user_id: user.id, provider, enabled: true, last_sync_at: syncedAt, updated_at: syncedAt },
+        { user_id: user.id, provider, enabled: true, last_sync_at: new Date().toISOString(), updated_at: new Date().toISOString() },
         { onConflict: "user_id,provider" }
       );
     if (providerError) throw providerError;
 
+    const syncedAt = new Date().toISOString();
     await finishSyncLog(syncLogId, {
       status: "success",
       imported_daily_records: dailyRows.length,
@@ -425,17 +311,16 @@ export async function syncNativeHealth({ days = 7 } = {}) {
 
     return {
       provider,
-      syncedAt,
       syncedDays: dailyRows.length,
       importedWorkouts: workouts.length,
       importedHeartSamples,
       importedVo2Samples,
       importedRoutePoints: 0,
       passivePoints: numeric(passivePoints),
+      syncedAt,
     };
   } catch (error) {
-    const message = friendlyHealthError(error);
-    await finishSyncLog(syncLogId, { status: "failed", message });
-    throw new Error(message);
+    await finishSyncLog(syncLogId, { status: "failed", message: error?.message || "Okänt synkfel" });
+    throw error;
   }
 }
